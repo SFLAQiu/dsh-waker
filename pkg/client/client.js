@@ -256,6 +256,11 @@ return {
       '.dswk-capSrvHead .dswk-capRow{flex:1;border-top:none;}',
       '.dswk-capTools{margin:0 12px 10px 32px;}',
       '.dswk-capTools .dswk-capRow{background:var(--dsw-alias-bg-module-platform);border-radius:8px;border-top:none;margin-top:2px;}',
+      // 能力区工具栏: 搜索 + 状态 + 批量按钮
+      '.dswk-capBar{display:flex;align-items:center;gap:8px;margin:6px 0;}',
+      '.dswk-capBar .dswk-capSearch{height:28px;flex:1;min-width:120px;max-width:280px;}',
+      '.dswk-capBar .dswk-btn{flex:none;}',
+      '.dswk-capStatus{font-size:12px;color:var(--dsw-alias-label-tertiary);white-space:nowrap;flex:1;text-align:right;}',
       '.dswk-tabs{display:flex;gap:2px;padding:2px;border-radius:10px;background:var(--dsw-alias-bg-module-platform);width:fit-content;margin:0 0 4px;}',
       '.dswk-tab{height:28px;padding:0 14px;font:inherit;font-size:13px;color:var(--dsw-alias-label-secondary);background:transparent;border:none;border-radius:8px;cursor:pointer;}',
       '.dswk-tab:hover{color:var(--dsw-alias-label-primary);}',
@@ -1043,6 +1048,8 @@ return {
       var capsNote = capsNoteS[0], setCapsNote = capsNoteS[1];
       var capsOpenS = React.useState({}); // server 折叠态
       var capsOpen = capsOpenS[0], setCapsOpen = capsOpenS[1];
+      var capsQueryS = React.useState({ mcp: '', skills: '' }); // 搜索过滤(MCP/技能)
+      var capsQuery = capsQueryS[0], setCapsQuery = capsQueryS[1];
       React.useEffect(function () {
         if (cat !== 'caps') return;
         setCapsNote(null);
@@ -1107,11 +1114,7 @@ return {
           }
         }
         var upd = Object.assign({}, capsEdit, { mcpServers: srv, mcpTools: tools });
-        if (!upd.mcpServers.length && (upd.mcpTools === null || !upd.mcpTools.length)) {
-          // 全空: mcpTools 若是显式空数组(用户逐工具挑过)保留数组语义,否则回全量 null
-          upd.mcpServers = null; upd.mcpTools = (capsEdit.mcpTools !== null && capsEdit.mcpTools.length === 0 && !on) ? [] : null;
-          if (upd.mcpServers === null && upd.mcpTools === null) { /* 回全量 */ }
-        }
+        // 空数组 = 白名单清空(全部关闭), 语义保留;回到全量须用「全量」按钮(置 null)
         setCapsEdit(upd);
       };
       var capsToggleTool = function (toolName, sname) {
@@ -1135,13 +1138,94 @@ return {
           tools.push(toolName);
         }
         var upd = Object.assign({}, capsEdit, { mcpServers: srv, mcpTools: tools });
-        if (!upd.mcpServers.length && !upd.mcpTools.length) { upd.mcpServers = null; upd.mcpTools = null; }
+        // 空数组语义保留(全部关闭);回全量走「全量」按钮
         setCapsEdit(upd);
       };
       var capsSkillOn = function (name) {
         if (!capsEdit) return false;
         if (capsEdit.skills === null) return true;
         return capsEdit.skills.indexOf(name) !== -1;
+      };
+      // ---- 批量操作与搜索(量大后逐个勾选不可操作) ----
+      var capsSetQuery = function (key, val) { setCapsQuery(Object.assign({}, capsQuery, (function () { var o = {}; o[key] = val; return o; })())); };
+      var capsMatch = function (q, s) { return !q || String(s || '').toLowerCase().indexOf(String(q).toLowerCase()) !== -1; };
+      var capsFilteredServers = function () {
+        var q = capsQuery.mcp || '';
+        return (capsCat && capsCat.mcpServers || []).filter(function (s) {
+          if (capsMatch(q, s.name)) return true;
+          return (s.tools || []).some(function (t) { return capsMatch(q, t.tool) || capsMatch(q, t.description); });
+        });
+      };
+      var capsFilteredSkills = function () {
+        var q = capsQuery.skills || '';
+        return (capsCat && capsCat.skills || []).filter(function (sk) {
+          return capsMatch(q, sk.name) || capsMatch(q, sk.displayName) || capsMatch(q, sk.description);
+        });
+      };
+      var capsSectionStatus = function (uiKey) {
+        var key = uiKey === 'mcp' ? 'mcpServers' : (uiKey === 'groups' ? 'builtinGroups' : uiKey);
+        var v = capsEdit ? capsEdit[key] : null;
+        if (v === null) return '全量（未限制）';
+        if (!v.length) return '已全部关闭';
+        return '白名单 ' + v.length + ' 项';
+      };
+      // mode: 'all'=筛选结果全选(白名单态下并入) | 'none'=筛选结果清空(白名单态下剔除;全量态下物化为补集)
+      //       | 'full'=整区回全量(null)
+      var capsBatchList = function (key, filteredNames) {
+        var upd = Object.assign({}, capsEdit);
+        return function (mode) {
+          if (mode === 'full') { upd[key] = null; setCapsEdit(Object.assign({}, upd)); return; }
+          var cur = capsEdit[key];
+          if (mode === 'all') {
+            if (cur === null) return; // 本就全量, 全选为空操作
+            var next = cur.slice();
+            filteredNames.forEach(function (n) { if (next.indexOf(n) === -1) next.push(n); });
+            upd[key] = next;
+          } else {
+            if (cur === null) {
+              // 全量 → 物化为补集(未被筛掉的保持启用), 被筛掉的关闭
+              var all = [];
+              if (key === 'skills') all = (capsCat && capsCat.skills || []).map(function (s) { return s.name; });
+              else all = (capsCat && capsCat.mcpServers || []).map(function (s) { return s.name; });
+              upd[key] = all.filter(function (n) { return filteredNames.indexOf(n) === -1; });
+            } else {
+              upd[key] = cur.filter(function (n) { return filteredNames.indexOf(n) === -1; });
+            }
+          }
+          setCapsEdit(Object.assign({}, upd));
+        };
+      };
+      var capsBatchSkills = function (mode) {
+        capsBatchList('skills', capsFilteredSkills().map(function (s) { return s.name; }))(mode);
+      };
+      var capsBatchMcp = function (mode) {
+        var filtered = capsFilteredServers().map(function (s) { return s.name; });
+        if (mode === 'full') {
+          setCapsEdit(Object.assign({}, capsEdit, { mcpServers: null, mcpTools: null }));
+          return;
+        }
+        var srvBatch = capsBatchList('mcpServers', filtered);
+        srvBatch(mode);
+        // 清空筛选掉的 server 时, 同步剔除其工具级白名单(避免残留不可见引用)
+        if (mode === 'none') {
+          setCapsEdit(function (prev) {
+            var tools = prev.mcpTools === null ? null : prev.mcpTools.slice();
+            if (tools !== null) {
+              (capsCat && capsCat.mcpServers || []).forEach(function (s) {
+                if (filtered.indexOf(s.name) === -1) return;
+                s.tools.forEach(function (t) { var i = tools.indexOf(t.name); if (i !== -1) tools.splice(i, 1); });
+              });
+            }
+            return Object.assign({}, prev, { mcpTools: tools });
+          });
+        }
+      };
+      var capsBatchGroups = function (mode) {
+        // 与其它区同模式: 'all'=显式全选(含锁定组,恒装不受影响) | 'none'=仅必选 | 'full'=回全量
+        if (mode === 'full') { setCapsEdit(Object.assign({}, capsEdit, { builtinGroups: null })); return; }
+        if (mode === 'none') { setCapsEdit(Object.assign({}, capsEdit, { builtinGroups: [] })); return; }
+        var all = groups.map(function (g) { return g.id; });
+        setCapsEdit(Object.assign({}, capsEdit, { builtinGroups: all }));
       };
       var openCapsEdit = function () {
         setCapsEdit({
@@ -1150,6 +1234,7 @@ return {
           mcpTools: w.capabilities ? (w.capabilities.mcpTools === null ? null : (w.capabilities.mcpTools || []).slice()) : null,
           skills: w.capabilities ? (w.capabilities.skills === null ? null : (w.capabilities.skills || []).slice()) : null
         });
+        setCapsQuery({ mcp: '', skills: '' });
         setCapsNote(null);
       };
       var saveCaps = function () {
@@ -1178,6 +1263,24 @@ return {
               sub ? React.createElement('span', { className: 'dswk-capSub' }, sub) : null),
             locked ? React.createElement('span', { className: 'dswk-badge' }, '必选') : null);
         };
+        // 区工具栏: 状态 + 搜索(可选) + 批量按钮(作用于当前筛选结果)
+        var capBar = function (key, placeholder, withSearch, batch) {
+          var q = capsQuery[key] || '';
+          return React.createElement('div', { className: 'dswk-capBar', key: key },
+            withSearch ? React.createElement('input', {
+              className: 'dswk-input dswk-capSearch', placeholder: placeholder, value: q,
+              onChange: function (e) { capsSetQuery(key, e.target.value); }
+            }) : null,
+            React.createElement('span', { className: 'dswk-capStatus' }, capsSectionStatus(key)),
+            React.createElement('button', { className: 'dswk-btn dswk-btnMini', title: '将当前筛选结果全部加入白名单', onClick: function () { batch('all'); } }, '全选'),
+            React.createElement('button', { className: 'dswk-btn dswk-btnMini', title: '将当前筛选结果从白名单移除', onClick: function () { batch('none'); } }, '清空'),
+            React.createElement('button', { className: 'dswk-btn dswk-btnMini', title: '本区恢复不限制（继承全量）', onClick: function () { batch('full'); } }, '全量'));
+        };
+        var capEmptyNote = function (kind) {
+          var q = capsQuery[kind.key] || '';
+          if (!kind.total) return React.createElement('p', { className: 'dswk-note', key: kind.key }, kind.noneText);
+          return React.createElement('p', { className: 'dswk-note', key: kind.key }, '无匹配项（共 ' + kind.total + ' 项）。');
+        };
         capsBody = React.createElement('div', { className: 'dswk-secGroup' },
           React.createElement('p', { className: 'dswk-note' },
             '能力安装统一在 DSH 全局完成（Skills 目录 / MCP 设置），此处仅管理本 Waker 启用哪些。不配置 = 继承 standard 全量；配置后仅白名单进入会话上下文。修改对新建会话生效，运行中会话不受影响。'),
@@ -1195,13 +1298,15 @@ return {
             : React.createElement('p', { className: 'dswk-note' }, '当前继承 standard 全量，未做裁剪')),
           capsEdit ? React.createElement(React.Fragment, null,
             React.createElement('h4', { className: 'dswk-capHeading' }, '内置能力组'),
+            capBar('groups', '', false, capsBatchGroups),
             React.createElement('div', { className: 'dswk-capList' },
               groups.map(function (g) {
                 return capRow(capsGroupOn(g.id), g.label, g.desc, g.locked, function () { capsToggleList('builtinGroups', g.id); });
               })),
             React.createElement('h4', { className: 'dswk-capHeading' }, 'MCP 工具'),
-            mcpSrvs.length ? React.createElement('div', { className: 'dswk-capList' },
-              mcpSrvs.map(function (s) {
+            capBar('mcp', '搜索 server / 工具 / 描述', true, capsBatchMcp),
+            mcpSrvs.length ? (capsFilteredServers().length ? React.createElement('div', { className: 'dswk-capList' },
+              capsFilteredServers().map(function (s) {
                 var open = !!capsOpen[s.name];
                 var toggleOpen = function () {
                   var nextOpen = Object.assign({}, capsOpen);
@@ -1216,12 +1321,13 @@ return {
                     s.tools.map(function (t) {
                       return capRow(capsToolOn(t.name, s.name), t.tool, t.description, false, function () { capsToggleTool(t.name, s.name); });
                     })) : null);
-              })) : React.createElement('p', { className: 'dswk-note' }, '全局尚未安装 MCP server。请在 DSH 全局设置中添加后再到这里选用。'),
+              })) : capEmptyNote({ key: 'mcp', total: mcpSrvs.length })) : React.createElement('p', { className: 'dswk-note' }, '全局尚未安装 MCP server。请在 DSH 全局设置中添加后再到这里选用。'),
             React.createElement('h4', { className: 'dswk-capHeading' }, '技能'),
-            skills.length ? React.createElement('div', { className: 'dswk-capList' },
-              skills.map(function (sk) {
+            capBar('skills', '搜索技能（名称 / 描述）', true, capsBatchSkills),
+            skills.length ? (capsFilteredSkills().length ? React.createElement('div', { className: 'dswk-capList' },
+              capsFilteredSkills().map(function (sk) {
                 return capRow(capsSkillOn(sk.name), sk.name, sk.description, false, function () { capsToggleList('skills', sk.name); });
-              })) : React.createElement('p', { className: 'dswk-note' }, '全局暂无已安装技能。请在 DSH 全局技能目录安装后再到这里选用。'),
+              })) : capEmptyNote({ key: 'skills', total: skills.length })) : React.createElement('p', { className: 'dswk-note' }, '全局暂无已安装技能。请在 DSH 全局技能目录安装后再到这里选用。'),
             React.createElement('p', { className: 'dswk-note' }, '项目级技能随任务项目自动可用，无需在此配置。')) : null);
       }
       var body = null;
