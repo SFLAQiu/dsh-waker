@@ -1,0 +1,7 @@
+# dsh-waker bundle patch — applied when this package joins a dsh profile's
+# `dsh.profile.bundles` layer stack (dsh plugin add / Plugin Market install).
+# Registers the host plugin rows; the client half mounts through the same
+# package manifest's `dsh.client` field.
+- insert:
+    - id: waker
+      name: dsh-waker

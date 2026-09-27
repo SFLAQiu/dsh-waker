@@ -1,0 +1,52 @@
+{
+  "name": "dsh-waker",
+  "version": "0.1.0",
+  "description": "DingTalk task dispatcher for DeepSeek Harness: turn any DingTalk group @-message into a DSH agent session, stream progress back to the group, with a task board in the Web settings page.",
+  "type": "module",
+  "main": "pkg/lib/index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sflyq/dsh-waker.git"
+  },
+  "exports": {
+    ".": "./pkg/lib/index.js",
+    "./client": "./pkg/client/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "pkg/lib/index.js",
+    "pkg/client/client.js",
+    "pkg/bridge/bridge.cjs",
+    "pkg/avatar-io.cjs",
+    "resource/img",
+    "patch.cordis.yml",
+    "README.md",
+    "README.zh.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    },
+    "bundle": {
+      "patch": "./patch.cordis.yml"
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "prepare": "node scripts/build.mjs",
+    "dev": "node scripts/dev.mjs",
+    "dev:once": "node scripts/dev.mjs --once"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "dingtalk",
+    "waker",
+    "deepseek-harness"
+  ],
+  "license": "MIT"
+}

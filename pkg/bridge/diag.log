@@ -1,0 +1,344 @@
+{"t":"2026-09-05T04:07:18.721Z","kind":"reply-attempt","conversationId":"2khdeaqt==","hasWebhook":false,"textLen":11}
+{"t":"2026-09-05T04:14:39.854Z","kind":"reply-attempt","conversationId":"2khdeaqt==","hasWebhook":false,"textLen":1224}
+{"t":"2026-09-05T05:08:29.467Z","kind":"callback","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","text":"{\"content\":\" 你好\"}"}
+{"t":"2026-09-05T05:08:29.722Z","kind":"reply-attempt","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":11}
+{"t":"2026-09-05T05:08:29.961Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-05T05:08:39.840Z","kind":"reply-attempt","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":257}
+{"t":"2026-09-05T05:08:40.070Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-05T06:14:21.382Z","kind":"reply-attempt","conversationId":"fepgy8mq==","hasWebhook":false,"textLen":11}
+{"t":"2026-09-05T06:14:50.819Z","kind":"reply-attempt","conversationId":"fepgy8mq==","hasWebhook":false,"textLen":413}
+{"t":"2026-09-05T06:42:14.948Z","kind":"reply-attempt","robotId":null,"conversationId":"nuqxve2w==","hasWebhook":false,"textLen":11}
+{"t":"2026-09-05T06:51:00.679Z","kind":"reply-attempt","robotId":null,"conversationId":"9v1nnv44==","hasWebhook":false,"textLen":11}
+{"t":"2026-09-05T06:51:49.588Z","kind":"reply-attempt","robotId":null,"conversationId":"j7k7abuw==","hasWebhook":false,"textLen":11}
+{"t":"2026-09-05T06:52:53.910Z","kind":"reply-attempt","robotId":null,"conversationId":"pgvt2bdo==","hasWebhook":false,"textLen":11}
+{"t":"2026-09-05T06:54:13.355Z","kind":"reply-attempt","robotId":null,"conversationId":"ctxtest1==","hasWebhook":false,"textLen":24}
+{"t":"2026-09-05T06:54:28.142Z","kind":"reply-attempt","robotId":null,"conversationId":"ctxtest1==","hasWebhook":false,"textLen":24}
+{"t":"2026-09-05T06:55:09.855Z","kind":"reply-attempt","robotId":null,"conversationId":"ctxtest1==","hasWebhook":false,"textLen":24}
+{"t":"2026-09-05T06:56:50.050Z","kind":"reply-attempt","robotId":null,"conversationId":"ctxtest1==","hasWebhook":false,"textLen":8}
+{"t":"2026-09-05T06:57:51.812Z","kind":"reply-attempt","robotId":null,"conversationId":"tctxfix1==","hasWebhook":false,"textLen":24}
+{"t":"2026-09-05T07:21:26.893Z","kind":"reply-attempt","robotId":null,"conversationId":"ctxtest1==","hasWebhook":false,"textLen":8}
+{"t":"2026-09-05T07:22:34.578Z","kind":"reply-attempt","robotId":null,"conversationId":"ctxtest1==","hasWebhook":false,"textLen":8}
+{"t":"2026-09-05T07:25:42.113Z","kind":"reply-attempt","robotId":null,"conversationId":"tctxfix2==","hasWebhook":false,"textLen":24}
+{"t":"2026-09-05T07:25:48.779Z","kind":"reply-attempt","robotId":null,"conversationId":"tctxfix2==","hasWebhook":false,"textLen":24}
+{"t":"2026-09-05T07:26:46.086Z","kind":"reply-attempt","robotId":null,"conversationId":"tctxfix1==","hasWebhook":false,"textLen":8}
+{"t":"2026-09-05T07:27:07.780Z","kind":"reply-attempt","robotId":null,"conversationId":"tctxfix2==","hasWebhook":false,"textLen":8}
+{"t":"2026-09-05T07:27:20.077Z","kind":"reply-attempt","robotId":null,"conversationId":"tctxfix2==","hasWebhook":false,"textLen":8}
+{"t":"2026-09-05T07:28:34.173Z","kind":"reply-attempt","robotId":null,"conversationId":"stbadge1==","hasWebhook":false,"textLen":24}
+{"t":"2026-09-05T07:30:10.682Z","kind":"reply-attempt","robotId":null,"conversationId":"stbadge1==","hasWebhook":false,"textLen":8}
+{"t":"2026-09-05T07:31:43.181Z","kind":"reply-attempt","robotId":null,"conversationId":"stbadge2==","hasWebhook":false,"textLen":24}
+{"t":"2026-09-05T07:33:16.273Z","kind":"reply-attempt","robotId":null,"conversationId":"stbadge2==","hasWebhook":false,"textLen":8}
+{"t":"2026-09-05T07:37:48.894Z","kind":"reply-attempt","robotId":null,"conversationId":"tattach1==","hasWebhook":false,"textLen":11}
+{"t":"2026-09-05T07:57:16.790Z","kind":"reply-attempt","robotId":null,"conversationId":"tintent2==","hasWebhook":false,"textLen":11}
+{"t":"2026-09-05T07:59:00.008Z","kind":"reply-attempt","robotId":null,"conversationId":"tintent3==","hasWebhook":false,"textLen":11}
+{"t":"2026-09-05T08:00:03.167Z","kind":"reply-attempt","robotId":null,"conversationId":"tintent4==","hasWebhook":false,"textLen":11}
+{"t":"2026-09-05T08:00:44.421Z","kind":"reply-attempt","robotId":null,"conversationId":"tintent5==","hasWebhook":false,"textLen":24}
+{"t":"2026-09-05T08:03:26.812Z","kind":"reply-attempt","robotId":null,"conversationId":"tintent5==","hasWebhook":false,"textLen":8}
+{"t":"2026-09-05T09:19:03.603Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 你是谁\"}"}
+{"t":"2026-09-05T09:19:39.266Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 你是？\"}"}
+{"t":"2026-09-05T09:20:39.275Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 你是？\"}"}
+{"t":"2026-09-05T09:46:45.027Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 你是？\"}"}
+{"t":"2026-09-05T09:51:30.142Z","kind":"reply-attempt","robotId":null,"conversationId":"evTestq2==","hasWebhook":false,"textLen":11}
+{"t":"2026-09-05T09:51:34.884Z","kind":"reply-attempt","robotId":null,"conversationId":"evTestq2==","hasWebhook":false,"textLen":571}
+{"t":"2026-09-05T09:53:36.325Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 你是谁？\"}"}
+{"t":"2026-09-05T09:53:37.745Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":11}
+{"t":"2026-09-05T09:53:37.980Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-05T09:53:40.607Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":345}
+{"t":"2026-09-05T09:53:40.682Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-05T10:53:59.040Z","kind":"reply-attempt","robotId":null,"conversationId":"vTestGit==","hasWebhook":false,"textLen":11}
+{"t":"2026-09-05T10:54:06.729Z","kind":"reply-attempt","robotId":null,"conversationId":"vTestGit==","hasWebhook":false,"textLen":440}
+{"t":"2026-09-05T10:59:03.280Z","kind":"reply-attempt","robotId":null,"conversationId":"TestGit2==","hasWebhook":false,"textLen":11}
+{"t":"2026-09-05T10:59:07.348Z","kind":"reply-attempt","robotId":null,"conversationId":"TestGit2==","hasWebhook":false,"textLen":94}
+{"t":"2026-09-05T11:01:44.048Z","kind":"reply-attempt","robotId":null,"conversationId":"TestDocs==","hasWebhook":false,"textLen":11}
+{"t":"2026-09-05T11:01:50.524Z","kind":"reply-attempt","robotId":null,"conversationId":"TestDocs==","hasWebhook":false,"textLen":163}
+{"t":"2026-09-05T11:02:32.608Z","kind":"reply-attempt","robotId":null,"conversationId":"TestGit3==","hasWebhook":false,"textLen":11}
+{"t":"2026-09-05T11:02:37.970Z","kind":"reply-attempt","robotId":null,"conversationId":"TestGit3==","hasWebhook":false,"textLen":41}
+{"t":"2026-09-05T11:02:44.677Z","kind":"reply-attempt","robotId":null,"conversationId":"estDocs2==","hasWebhook":false,"textLen":11}
+{"t":"2026-09-05T11:02:49.242Z","kind":"reply-attempt","robotId":null,"conversationId":"estDocs2==","hasWebhook":false,"textLen":193}
+{"t":"2026-09-06T00:29:49.495Z","kind":"reply-attempt","robotId":null,"conversationId":"eTestai1==","hasWebhook":false,"textLen":11}
+{"t":"2026-09-06T00:32:00.936Z","kind":"reply-attempt","robotId":null,"conversationId":"eTestai2==","hasWebhook":false,"textLen":11}
+{"t":"2026-09-06T00:33:27.710Z","kind":"reply-attempt","robotId":null,"conversationId":"eTestai3==","hasWebhook":false,"textLen":24}
+{"t":"2026-09-06T00:33:41.736Z","kind":"reply-attempt","robotId":null,"conversationId":"eTestai2==","hasWebhook":false,"textLen":615}
+{"t":"2026-09-06T00:33:41.808Z","kind":"reply-attempt","robotId":null,"conversationId":"eTestai3==","hasWebhook":false,"textLen":8}
+{"t":"2026-09-06T00:33:58.564Z","kind":"reply-attempt","robotId":null,"conversationId":"eTestai4==","hasWebhook":false,"textLen":24}
+{"t":"2026-09-06T00:35:30.611Z","kind":"reply-attempt","robotId":null,"conversationId":"eTestai5==","hasWebhook":false,"textLen":24}
+{"t":"2026-09-06T00:35:31.712Z","kind":"reply-attempt","robotId":null,"conversationId":"eTestai6==","hasWebhook":false,"textLen":24}
+{"t":"2026-09-06T00:36:28.874Z","kind":"reply-attempt","robotId":null,"conversationId":"eTestai4==","hasWebhook":false,"textLen":8}
+{"t":"2026-09-06T00:36:44.866Z","kind":"reply-attempt","robotId":null,"conversationId":"eTestai5==","hasWebhook":false,"textLen":8}
+{"t":"2026-09-06T00:37:05.042Z","kind":"reply-attempt","robotId":null,"conversationId":"eTestai7==","hasWebhook":false,"textLen":24}
+{"t":"2026-09-06T00:37:05.346Z","kind":"reply-attempt","robotId":null,"conversationId":"eTestai9==","hasWebhook":false,"textLen":24}
+{"t":"2026-09-06T00:37:05.440Z","kind":"reply-attempt","robotId":null,"conversationId":"eTestai8==","hasWebhook":false,"textLen":24}
+{"t":"2026-09-06T00:39:30.623Z","kind":"reply-attempt","robotId":null,"conversationId":"eTestai6==","hasWebhook":false,"textLen":8}
+{"t":"2026-09-06T00:39:50.107Z","kind":"reply-attempt","robotId":null,"conversationId":"Testai10==","hasWebhook":false,"textLen":24}
+{"t":"2026-09-06T00:39:50.201Z","kind":"reply-attempt","robotId":null,"conversationId":"Testai12==","hasWebhook":false,"textLen":24}
+{"t":"2026-09-06T00:39:51.719Z","kind":"reply-attempt","robotId":null,"conversationId":"Testai11==","hasWebhook":false,"textLen":24}
+{"t":"2026-09-06T00:40:35.394Z","kind":"reply-attempt","robotId":null,"conversationId":"eTestai7==","hasWebhook":false,"textLen":8}
+{"t":"2026-09-06T00:40:48.071Z","kind":"reply-attempt","robotId":null,"conversationId":"eTestai9==","hasWebhook":false,"textLen":8}
+{"t":"2026-09-06T00:41:07.967Z","kind":"reply-attempt","robotId":null,"conversationId":"Testai13==","hasWebhook":false,"textLen":24}
+{"t":"2026-09-06T00:41:43.779Z","kind":"reply-attempt","robotId":null,"conversationId":"eTestai8==","hasWebhook":false,"textLen":8}
+{"t":"2026-09-06T00:42:03.628Z","kind":"reply-attempt","robotId":null,"conversationId":"Testai14==","hasWebhook":false,"textLen":24}
+{"t":"2026-09-06T00:42:49.011Z","kind":"reply-attempt","robotId":null,"conversationId":"Testai10==","hasWebhook":false,"textLen":8}
+{"t":"2026-09-06T00:43:05.799Z","kind":"reply-attempt","robotId":null,"conversationId":"Testai15==","hasWebhook":false,"textLen":24}
+{"t":"2026-09-06T00:43:32.538Z","kind":"reply-attempt","robotId":null,"conversationId":"Testai12==","hasWebhook":false,"textLen":8}
+{"t":"2026-09-06T00:43:49.075Z","kind":"reply-attempt","robotId":null,"conversationId":"Testai16==","hasWebhook":false,"textLen":24}
+{"t":"2026-09-06T00:44:14.958Z","kind":"reply-attempt","robotId":null,"conversationId":"Testai11==","hasWebhook":false,"textLen":8}
+{"t":"2026-09-06T00:44:32.367Z","kind":"reply-attempt","robotId":null,"conversationId":"Testai17==","hasWebhook":false,"textLen":24}
+{"t":"2026-09-06T00:44:58.640Z","kind":"reply-attempt","robotId":null,"conversationId":"Testai13==","hasWebhook":false,"textLen":8}
+{"t":"2026-09-06T00:45:17.000Z","kind":"reply-attempt","robotId":null,"conversationId":"Testai18==","hasWebhook":false,"textLen":24}
+{"t":"2026-09-06T00:45:49.281Z","kind":"reply-attempt","robotId":null,"conversationId":"Testai20==","hasWebhook":false,"textLen":24}
+{"t":"2026-09-06T00:45:50.322Z","kind":"reply-attempt","robotId":null,"conversationId":"Testai21==","hasWebhook":false,"textLen":24}
+{"t":"2026-09-06T00:45:50.605Z","kind":"reply-attempt","robotId":null,"conversationId":"Testai19==","hasWebhook":false,"textLen":24}
+{"t":"2026-09-06T00:46:22.416Z","kind":"reply-attempt","robotId":null,"conversationId":"Testai14==","hasWebhook":false,"textLen":8}
+{"t":"2026-09-06T00:46:29.038Z","kind":"reply-attempt","robotId":null,"conversationId":"Testai15==","hasWebhook":false,"textLen":8}
+{"t":"2026-09-06T00:46:48.001Z","kind":"reply-attempt","robotId":null,"conversationId":"Testai22==","hasWebhook":false,"textLen":24}
+{"t":"2026-09-06T01:07:02.611Z","kind":"reply-attempt","robotId":null,"conversationId":"Testai16==","hasWebhook":false,"textLen":8}
+{"t":"2026-09-06T01:22:03.712Z","kind":"reply-attempt","robotId":null,"conversationId":"Testai17==","hasWebhook":false,"textLen":8}
+{"t":"2026-09-06T01:22:03.785Z","kind":"reply-attempt","robotId":null,"conversationId":"Testai18==","hasWebhook":false,"textLen":8}
+{"t":"2026-09-06T01:22:07.314Z","kind":"reply-attempt","robotId":null,"conversationId":"Testai20==","hasWebhook":false,"textLen":8}
+{"t":"2026-09-06T01:22:07.379Z","kind":"reply-attempt","robotId":null,"conversationId":"Testai21==","hasWebhook":false,"textLen":8}
+{"t":"2026-09-06T01:38:39.573Z","kind":"reply-attempt","robotId":null,"conversationId":"Testai20==","hasWebhook":false,"textLen":1815}
+{"t":"2026-09-06T01:38:39.648Z","kind":"reply-attempt","robotId":null,"conversationId":"Testai19==","hasWebhook":false,"textLen":8}
+{"t":"2026-09-06T01:42:45.717Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" moment项目最近最近一次提交信息\"}"}
+{"t":"2026-09-06T01:42:45.878Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":24}
+{"t":"2026-09-06T01:42:46.144Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T01:43:03.957Z","kind":"reply-attempt","robotId":null,"conversationId":"Testai21==","hasWebhook":false,"textLen":5}
+{"t":"2026-09-06T01:45:02.560Z","kind":"reply-attempt","robotId":null,"conversationId":"Testai21==","hasWebhook":false,"textLen":189}
+{"t":"2026-09-06T01:45:02.631Z","kind":"reply-attempt","robotId":null,"conversationId":"Testai22==","hasWebhook":false,"textLen":8}
+{"t":"2026-09-06T01:45:15.964Z","kind":"reply-attempt","robotId":null,"conversationId":"Testai22==","hasWebhook":false,"textLen":44}
+{"t":"2026-09-06T01:45:16.043Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":8}
+{"t":"2026-09-06T01:45:16.062Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":341}
+{"t":"2026-09-06T01:45:17.761Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T01:45:17.763Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T03:14:55.144Z","kind":"reply-attempt","robotId":null,"conversationId":"idWkGrp1==","hasWebhook":false,"textLen":11}
+{"t":"2026-09-06T03:14:55.215Z","kind":"reply-attempt","robotId":null,"conversationId":"idWkGrp1==","hasWebhook":false,"textLen":341}
+{"t":"2026-09-06T07:33:44.292Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 帮我查下最近moment git提交信息\"}"}
+{"t":"2026-09-06T07:33:53.923Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":11}
+{"t":"2026-09-06T07:33:54.224Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T07:34:49.545Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":1118}
+{"t":"2026-09-06T07:34:49.857Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T07:38:07.716Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 帮我查下/moment有几个接口列出接口列表\"}"}
+{"t":"2026-09-06T07:39:18.116Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":1817}
+{"t":"2026-09-06T07:39:18.433Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T07:55:49.644Z","kind":"reply-attempt","robotId":null,"conversationId":"cidCard1==","hasWebhook":false,"textLen":11,"format":"text"}
+{"t":"2026-09-06T07:55:54.045Z","kind":"reply-attempt","robotId":null,"conversationId":"cidCard1==","hasWebhook":false,"textLen":362,"format":"actionCard"}
+{"t":"2026-09-06T07:59:07.533Z","kind":"reply-attempt","robotId":null,"conversationId":"cidAck1==","hasWebhook":false,"textLen":2,"format":"text"}
+{"t":"2026-09-06T07:59:16.035Z","kind":"reply-attempt","robotId":null,"conversationId":"cidAck1==","hasWebhook":false,"textLen":11,"format":"text"}
+{"t":"2026-09-06T07:59:18.828Z","kind":"reply-attempt","robotId":null,"conversationId":"cidAck1==","hasWebhook":false,"textLen":102,"format":"actionCard"}
+{"t":"2026-09-06T08:05:10.674Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 在吗\"}"}
+{"t":"2026-09-06T08:05:10.725Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":2,"format":"text"}
+{"t":"2026-09-06T08:05:11.022Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T08:32:51.156Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 你能帮我做什么？\"}"}
+{"t":"2026-09-06T08:32:51.444Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":2,"format":"text"}
+{"t":"2026-09-06T08:32:51.681Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T08:32:59.235Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":11,"format":"text"}
+{"t":"2026-09-06T08:32:59.511Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T08:33:05.289Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":763,"format":"actionCard"}
+{"t":"2026-09-06T08:33:05.496Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T08:43:27.917Z","kind":"reply-attempt","robotId":null,"conversationId":"cidAck2==","hasWebhook":false,"textLen":2,"format":"text"}
+{"t":"2026-09-06T09:09:57.382Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 你好\"}"}
+{"t":"2026-09-06T09:09:57.671Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":2,"format":"text"}
+{"t":"2026-09-06T09:09:59.789Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T09:14:16.158Z","kind":"reply-attempt","robotId":null,"conversationId":"idNudge1==","hasWebhook":false,"textLen":2,"format":"text"}
+{"t":"2026-09-06T09:14:18.231Z","kind":"reply-attempt","robotId":null,"conversationId":"idNudge1==","hasWebhook":false,"textLen":2,"format":"text"}
+{"t":"2026-09-06T09:14:18.550Z","kind":"reply-attempt","robotId":null,"conversationId":"idNudge1==","hasWebhook":false,"textLen":79,"format":"text"}
+{"t":"2026-09-06T09:14:20.305Z","kind":"reply-attempt","robotId":null,"conversationId":"idNudge2==","hasWebhook":false,"textLen":2,"format":"text"}
+{"t":"2026-09-06T09:14:26.075Z","kind":"reply-attempt","robotId":null,"conversationId":"idNudge2==","hasWebhook":false,"textLen":11,"format":"text"}
+{"t":"2026-09-06T09:16:47.012Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 你好\"}"}
+{"t":"2026-09-06T09:16:47.029Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":2,"format":"text"}
+{"t":"2026-09-06T09:16:47.265Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T09:16:48.931Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":79,"format":"text"}
+{"t":"2026-09-06T09:16:49.007Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T09:17:46.201Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"isReplyMsg\":true,\"repliedMsg\":{\"createdAt\":1788686251052,\"senderId\":\"$:LWCP_v1:$1oaD+dMowJkO7BVitiA7/Q==\",\"msgType\":\"t"}
+{"t":"2026-09-06T09:17:46.373Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":2,"format":"text"}
+{"t":"2026-09-06T09:17:46.673Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T09:17:46.835Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":11,"format":"text"}
+{"t":"2026-09-06T09:17:46.906Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T09:17:49.282Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":164,"format":"actionCard"}
+{"t":"2026-09-06T09:17:49.364Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T09:18:01.424Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 帮我查下/moment接口\"}"}
+{"t":"2026-09-06T09:18:01.444Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":2,"format":"text"}
+{"t":"2026-09-06T09:18:01.644Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T09:18:47.503Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":1800,"format":"actionCard"}
+{"t":"2026-09-06T09:18:47.713Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T09:41:40.587Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 你是谁？\"}"}
+{"t":"2026-09-06T09:41:40.884Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":2,"format":"text"}
+{"t":"2026-09-06T09:41:41.225Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T09:41:43.051Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":11,"format":"text"}
+{"t":"2026-09-06T09:41:43.205Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T09:41:45.930Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":262,"format":"actionCard"}
+{"t":"2026-09-06T09:41:46.009Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T11:06:26.282Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 你好，你是谁\"}"}
+{"t":"2026-09-06T11:06:26.300Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":2,"format":"text"}
+{"t":"2026-09-06T11:06:26.516Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T11:06:28.753Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":11,"format":"text"}
+{"t":"2026-09-06T11:06:28.822Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T11:18:13.456Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":478,"format":"actionCard"}
+{"t":"2026-09-06T11:18:13.644Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T11:51:49.333Z","kind":"reply-attempt","robotId":null,"conversationId":"cidSmk==","hasWebhook":false,"textLen":2,"format":"text"}
+{"t":"2026-09-06T11:51:49.359Z","kind":"reply-attempt","robotId":null,"conversationId":"cidSmk==","hasWebhook":false,"textLen":11,"format":"text"}
+{"t":"2026-09-06T11:51:54.109Z","kind":"reply-attempt","robotId":null,"conversationId":"cidSmk==","hasWebhook":false,"textLen":63,"format":"markdown"}
+{"t":"2026-09-06T11:55:56.035Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 你是谁\"}"}
+{"t":"2026-09-06T11:55:56.280Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":2,"format":"text"}
+{"t":"2026-09-06T11:55:56.509Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T11:56:00.390Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":11,"format":"text"}
+{"t":"2026-09-06T11:56:00.463Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T11:56:03.399Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":275,"format":"markdown"}
+{"t":"2026-09-06T11:56:03.502Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T11:56:31.404Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 你现在有什么项目权限\"}"}
+{"t":"2026-09-06T11:56:31.482Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":2,"format":"text"}
+{"t":"2026-09-06T11:56:31.697Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T11:57:07.048Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":779,"format":"markdown"}
+{"t":"2026-09-06T11:57:07.268Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T12:09:29.955Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 你有能访问什么工程项目？\"}"}
+{"t":"2026-09-06T12:09:30.113Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":2,"format":"text"}
+{"t":"2026-09-06T12:09:30.333Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T12:09:33.528Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":11,"format":"text"}
+{"t":"2026-09-06T12:09:33.597Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T12:09:56.933Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":934,"format":"markdown"}
+{"t":"2026-09-06T12:09:57.243Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T12:44:34.358Z","kind":"reply-attempt","robotId":null,"conversationId":"wktst-a1==","hasWebhook":false,"textLen":2,"format":"text"}
+{"t":"2026-09-06T12:44:38.945Z","kind":"reply-attempt","robotId":null,"conversationId":"wktst-a1==","hasWebhook":false,"textLen":11,"format":"text"}
+{"t":"2026-09-06T12:44:42.920Z","kind":"reply-attempt","robotId":null,"conversationId":"wktst-a1==","hasWebhook":false,"textLen":108,"format":"markdown"}
+{"t":"2026-09-06T12:45:28.716Z","kind":"reply-attempt","robotId":null,"conversationId":"wktst-b1==","hasWebhook":false,"textLen":2,"format":"text"}
+{"t":"2026-09-06T12:45:33.275Z","kind":"reply-attempt","robotId":null,"conversationId":"wktst-b1==","hasWebhook":false,"textLen":11,"format":"text"}
+{"t":"2026-09-06T12:45:46.488Z","kind":"reply-attempt","robotId":null,"conversationId":"wktst-b1==","hasWebhook":false,"textLen":110,"format":"text"}
+{"t":"2026-09-06T12:49:07.928Z","kind":"reply-attempt","robotId":null,"conversationId":"wktst-b2==","hasWebhook":false,"textLen":2,"format":"text"}
+{"t":"2026-09-06T12:49:12.489Z","kind":"reply-attempt","robotId":null,"conversationId":"wktst-b2==","hasWebhook":false,"textLen":11,"format":"text"}
+{"t":"2026-09-06T12:49:20.664Z","kind":"reply-attempt","robotId":null,"conversationId":"wktst-b2==","hasWebhook":false,"textLen":535,"format":"markdown"}
+{"t":"2026-09-06T12:50:38.880Z","kind":"reply-attempt","robotId":null,"conversationId":"wktst-c1==","hasWebhook":false,"textLen":2,"format":"text"}
+{"t":"2026-09-06T12:50:42.176Z","kind":"reply-attempt","robotId":null,"conversationId":"wktst-c1==","hasWebhook":false,"textLen":11,"format":"text"}
+{"t":"2026-09-06T12:50:47.121Z","kind":"reply-attempt","robotId":null,"conversationId":"wktst-c1==","hasWebhook":false,"textLen":488,"format":"markdown"}
+{"t":"2026-09-06T12:52:08.062Z","kind":"reply-attempt","robotId":null,"conversationId":"wktst-c2==","hasWebhook":false,"textLen":2,"format":"text"}
+{"t":"2026-09-06T12:52:12.859Z","kind":"reply-attempt","robotId":null,"conversationId":"wktst-c2==","hasWebhook":false,"textLen":11,"format":"text"}
+{"t":"2026-09-06T12:52:17.428Z","kind":"reply-attempt","robotId":null,"conversationId":"wktst-c2==","hasWebhook":false,"textLen":100,"format":"markdown"}
+{"t":"2026-09-06T13:09:49.653Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 你有什么项目权限？\"}"}
+{"t":"2026-09-06T13:09:49.718Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":2,"format":"text"}
+{"t":"2026-09-06T13:09:49.921Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T13:09:52.818Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":11,"format":"text"}
+{"t":"2026-09-06T13:09:52.891Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T13:09:56.528Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":361,"format":"markdown"}
+{"t":"2026-09-06T13:09:56.643Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T13:22:19.296Z","kind":"reply-attempt","robotId":null,"conversationId":"st-card1==","hasWebhook":false,"textLen":2,"format":"text"}
+{"t":"2026-09-06T13:22:23.624Z","kind":"reply-attempt","robotId":null,"conversationId":"st-card1==","hasWebhook":false,"textLen":11,"format":"text"}
+{"t":"2026-09-06T13:22:26.004Z","kind":"reply-attempt","robotId":null,"conversationId":"st-card1==","hasWebhook":false,"textLen":180,"format":"aicard"}
+{"t":"2026-09-06T13:26:08.109Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 你有什么能力\"}"}
+{"t":"2026-09-06T13:26:08.371Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":2,"format":"text"}
+{"t":"2026-09-06T13:26:08.640Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T13:26:10.626Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":11,"format":"text"}
+{"t":"2026-09-06T13:26:10.695Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T13:26:17.341Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":984,"format":"aicard"}
+{"t":"2026-09-06T13:26:17.897Z","kind":"aicard-sent","robotId":"robot-default","conversationId":"Z2qOO37g==","outTrackId":"wkaicard-robot-default-1788701177578-b4gebk","spaceType":"IM_GROUP","streamingOk":true}
+{"t":"2026-09-06T13:26:17.899Z","kind":"reply-result","conversationId":"Z2qOO37g==","via":"aicard","outTrackId":"wkaicard-robot-default-1788701177578-b4gebk"}
+{"t":"2026-09-06T13:26:51.989Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 你有什么能力？用表格输出\"}"}
+{"t":"2026-09-06T13:26:51.997Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":2,"format":"text"}
+{"t":"2026-09-06T13:26:52.212Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T13:27:02.078Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":1513,"format":"aicard"}
+{"t":"2026-09-06T13:27:02.547Z","kind":"aicard-sent","robotId":"robot-default","conversationId":"Z2qOO37g==","outTrackId":"wkaicard-robot-default-1788701222079-qxeeod","spaceType":"IM_GROUP","streamingOk":true}
+{"t":"2026-09-06T13:27:02.547Z","kind":"reply-result","conversationId":"Z2qOO37g==","via":"aicard","outTrackId":"wkaicard-robot-default-1788701222079-qxeeod"}
+{"t":"2026-09-06T13:53:37.381Z","kind":"reply-attempt","robotId":null,"conversationId":"ktst-md1==","hasWebhook":false,"textLen":2,"format":"text"}
+{"t":"2026-09-06T13:53:41.276Z","kind":"reply-attempt","robotId":null,"conversationId":"ktst-md1==","hasWebhook":false,"textLen":11,"format":"text"}
+{"t":"2026-09-06T13:53:45.430Z","kind":"reply-attempt","robotId":null,"conversationId":"ktst-md1==","hasWebhook":false,"textLen":329,"format":"markdown"}
+{"t":"2026-09-06T14:45:05.874Z","kind":"reply-attempt","robotId":null,"conversationId":"ktst-ac1==","hasWebhook":false,"textLen":2,"format":"text"}
+{"t":"2026-09-06T14:45:11.536Z","kind":"reply-attempt","robotId":null,"conversationId":"ktst-ac1==","hasWebhook":false,"textLen":11,"format":"text"}
+{"t":"2026-09-06T14:45:21.485Z","kind":"reply-attempt","robotId":null,"conversationId":"ktst-ac1==","hasWebhook":false,"textLen":628,"format":"actioncard"}
+{"t":"2026-09-06T15:56:51.845Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 你有什么能力？用表格输出\"}"}
+{"t":"2026-09-06T15:56:51.995Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":2,"format":"text"}
+{"t":"2026-09-06T15:56:52.278Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T15:56:55.340Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":11,"format":"text"}
+{"t":"2026-09-06T15:56:55.417Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-06T15:57:04.890Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":1540,"format":"actioncard"}
+{"t":"2026-09-06T15:57:05.110Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-07T03:02:20.757Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 你有什么功能？\"}"}
+{"t":"2026-09-07T03:02:20.822Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":2,"format":"text"}
+{"t":"2026-09-07T03:02:21.181Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-07T03:02:33.990Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":1176,"format":"actioncard"}
+{"t":"2026-09-07T03:02:34.188Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-07T03:03:00.510Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 你有什么项目权限？\"}"}
+{"t":"2026-09-07T03:03:00.530Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":2,"format":"text"}
+{"t":"2026-09-07T03:03:00.836Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-07T03:03:10.698Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":728,"format":"actioncard"}
+{"t":"2026-09-07T03:03:10.888Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-07T03:03:31.136Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 你好\"}"}
+{"t":"2026-09-07T03:03:31.214Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":2,"format":"text"}
+{"t":"2026-09-07T03:03:31.406Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-07T03:03:33.422Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":79,"format":"text"}
+{"t":"2026-09-07T03:03:33.497Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-07T03:04:00.520Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 你有什么项目权限？\"}"}
+{"t":"2026-09-07T03:04:00.697Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":2,"format":"text"}
+{"t":"2026-09-07T03:04:00.888Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-07T03:04:07.755Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":612,"format":"actioncard"}
+{"t":"2026-09-07T03:04:08.152Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-07T03:04:31.080Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 你好\"}"}
+{"t":"2026-09-07T03:04:31.372Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":2,"format":"text"}
+{"t":"2026-09-07T03:04:31.617Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-07T03:13:30.448Z","kind":"reply-attempt","robotId":null,"conversationId":"wktst-r1==","hasWebhook":false,"textLen":11,"format":"text"}
+{"t":"2026-09-07T03:13:54.296Z","kind":"reply-attempt","robotId":null,"conversationId":"wktst-r1==","hasWebhook":false,"textLen":1662,"format":"actioncard"}
+{"t":"2026-09-07T03:14:46.977Z","kind":"reply-attempt","robotId":null,"conversationId":"wktst-r2==","hasWebhook":false,"textLen":11,"format":"text"}
+{"t":"2026-09-07T03:14:49.782Z","kind":"reply-attempt","robotId":null,"conversationId":"wktst-r2==","hasWebhook":false,"textLen":129,"format":"actioncard"}
+{"t":"2026-09-07T03:17:48.797Z","kind":"reply-attempt","robotId":null,"conversationId":"wktst-r3==","hasWebhook":false,"textLen":660,"format":"actioncard"}
+{"t":"2026-09-07T03:18:46.701Z","kind":"reply-attempt","robotId":null,"conversationId":"wktst-r4==","hasWebhook":false,"textLen":11,"format":"text"}
+{"t":"2026-09-07T03:18:51.411Z","kind":"reply-attempt","robotId":null,"conversationId":"wktst-r4==","hasWebhook":false,"textLen":33,"format":"actioncard"}
+{"t":"2026-09-26T05:49:24.866Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 在吗\"}"}
+{"t":"2026-09-26T05:49:25.035Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":11,"format":"text"}
+{"t":"2026-09-26T05:49:25.131Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":322,"format":"actioncard"}
+{"t":"2026-09-26T05:49:25.268Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-26T05:49:25.335Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-26T05:50:40.318Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 在吗\"}"}
+{"t":"2026-09-26T05:50:40.529Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":322,"format":"actioncard"}
+{"t":"2026-09-26T05:50:40.795Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-26T05:51:59.404Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 在呀\"}"}
+{"t":"2026-09-26T05:52:01.518Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":79,"format":"text"}
+{"t":"2026-09-26T05:52:01.793Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-26T05:52:15.010Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 你是谁\"}"}
+{"t":"2026-09-26T05:52:16.505Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":322,"format":"actioncard"}
+{"t":"2026-09-26T05:52:16.767Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-26T06:21:57.942Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 你好\"}"}
+{"t":"2026-09-26T06:21:59.251Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":79,"format":"text"}
+{"t":"2026-09-26T06:21:59.557Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-26T06:22:11.409Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 你有什么能力？\"}"}
+{"t":"2026-09-26T06:22:27.362Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":844,"format":"actioncard"}
+{"t":"2026-09-26T06:22:27.593Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-26T06:35:30.204Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 你有什么能力\"}"}
+{"t":"2026-09-26T06:35:30.288Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":3,"format":"text"}
+{"t":"2026-09-26T06:35:30.626Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-26T06:35:42.663Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":835,"format":"actioncard"}
+{"t":"2026-09-26T06:35:42.883Z","kind":"reply-result","conversationId":"Z2qOO37g==","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-26T06:56:46.103Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 你有什么能力？\"}"}
+{"t":"2026-09-26T06:56:46.324Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":3,"format":"text"}
+{"t":"2026-09-26T06:56:46.586Z","kind":"reply-result","conversationId":"Z2qOO37g==","via":"webhook","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-26T06:56:58.270Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":796,"format":"actioncard"}
+{"t":"2026-09-26T06:56:58.549Z","kind":"reply-result","conversationId":"Z2qOO37g==","via":"webhook","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-26T07:04:56.586Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 我现在有个测试，安排谁来？\"}"}
+{"t":"2026-09-26T07:04:56.817Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":3,"format":"text"}
+{"t":"2026-09-26T07:04:57.085Z","kind":"reply-result","conversationId":"Z2qOO37g==","via":"webhook","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-26T07:33:02.372Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 我现在有个测试，安排谁来？\"}"}
+{"t":"2026-09-26T07:33:02.392Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":3,"format":"text"}
+{"t":"2026-09-26T07:33:02.675Z","kind":"reply-result","conversationId":"Z2qOO37g==","via":"webhook","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-26T08:11:03.731Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":51,"format":"text"}
+{"t":"2026-09-26T08:11:05.591Z","kind":"reply-result","conversationId":"Z2qOO37g==","via":"webhook","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-26T12:03:59.752Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"isReplyMsg\":true,\"repliedMsg\":{\"createdAt\":1788680358736,\"senderId\":\"$:LWCP_v1:$Rz9t7IT1SbWtihI3vu8epB6tXSj3UPol\",\"msg"}
+{"t":"2026-09-26T12:03:59.929Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":3,"format":"text"}
+{"t":"2026-09-26T12:04:00.194Z","kind":"reply-result","conversationId":"Z2qOO37g==","via":"webhook","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-26T12:05:10.744Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":499,"format":"actioncard"}
+{"t":"2026-09-26T12:05:10.961Z","kind":"reply-result","conversationId":"Z2qOO37g==","via":"webhook","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-26T12:07:35.538Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 你能做什么？\"}"}
+{"t":"2026-09-26T12:07:35.634Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":3,"format":"text"}
+{"t":"2026-09-26T12:07:35.909Z","kind":"reply-result","conversationId":"Z2qOO37g==","via":"webhook","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-26T12:07:52.457Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":925,"format":"actioncard"}
+{"t":"2026-09-26T12:07:52.681Z","kind":"reply-result","conversationId":"Z2qOO37g==","via":"webhook","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-26T12:32:33.555Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 你有什么能力\"}"}
+{"t":"2026-09-26T12:32:33.637Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":3,"format":"text"}
+{"t":"2026-09-26T12:32:33.978Z","kind":"reply-result","conversationId":"Z2qOO37g==","via":"webhook","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-26T12:32:48.807Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":859,"format":"actioncard"}
+{"t":"2026-09-26T12:32:49.045Z","kind":"reply-result","conversationId":"Z2qOO37g==","via":"webhook","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-26T12:35:05.185Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 你能做什么？\"}"}
+{"t":"2026-09-26T12:35:05.197Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":3,"format":"text"}
+{"t":"2026-09-26T12:35:05.401Z","kind":"reply-result","conversationId":"Z2qOO37g==","via":"webhook","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-26T12:35:22.165Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":787,"format":"actioncard"}
+{"t":"2026-09-26T12:35:22.416Z","kind":"reply-result","conversationId":"Z2qOO37g==","via":"webhook","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-26T14:41:45.581Z","kind":"callback","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"msgType":"text","isAtAll":false,"atUsers":1,"convType":"2","text":"{\"content\":\" 帮我看下最近一次的代码提交，自己coderiew下\"}"}
+{"t":"2026-09-26T14:41:45.630Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":3,"format":"text"}
+{"t":"2026-09-26T14:41:45.973Z","kind":"reply-result","conversationId":"Z2qOO37g==","via":"webhook","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-26T14:41:48.124Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":11,"format":"text"}
+{"t":"2026-09-26T14:41:48.192Z","kind":"reply-result","conversationId":"Z2qOO37g==","via":"webhook","status":200,"data":{"errcode":0,"errmsg":"ok"}}
+{"t":"2026-09-26T14:50:26.717Z","kind":"reply-attempt","robotId":"robot-default","conversationId":"Z2qOO37g==","hasWebhook":true,"textLen":318,"format":"actioncard"}
+{"t":"2026-09-26T14:50:27.058Z","kind":"reply-result","conversationId":"Z2qOO37g==","via":"webhook","status":200,"data":{"errcode":0,"errmsg":"ok"}}

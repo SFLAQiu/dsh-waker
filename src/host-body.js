@@ -1,0 +1,3251 @@
+return {
+  inject: ['timer', 'subprocess', 'credentials', 'storageDomain', 'agents', 'agentPresets', 'workspaceRegistry', 'sessionTitle', 'sessionQuery', 'agentDefaultModel'],
+  apply(ctx) {
+    // 桥接脚本随包安装：包内 bridge/ 目录
+    var BRIDGE_PATH = new URL('../bridge/bridge.cjs', import.meta.url).pathname; // pkg/bridge/bridge.cjs (build 复制自 src/bridge.cjs)
+    // 头像目录: 仓库 resource/img(pkg/lib/index.js → ../../resource/img);构建产物与 src 同仓库布局,故同一 URL 常量适用
+    var AVATAR_DIR = new URL('../../resource/img/', import.meta.url).pathname;
+    var AVATAR_EXTS = ['.png', '.jpg', '.jpeg', '.webp', '.gif'];
+    var AVATAR_MAX_BYTES = 3 * 1024 * 1024;
+    // 会话工作目录：优先用户配置 config.cwd，其次注册表第一个工作区，
+    // 最后退回 DSH_WAKER_CWD 环境变量 / 进程 cwd。绝不硬编码开发者本机路径。
+    var FALLBACK_CWD = typeof process !== 'undefined' && process.env && process.env.DSH_WAKER_CWD
+      ? process.env.DSH_WAKER_CWD
+      : null;
+    var REF_SECRET = 'DINGTALK_CLIENT_SECRET';
+    var DEFAULTS = { clientId: '', autoStart: true, concurrencyCap: 2, cwd: '', contextWindow: { maxMessages: 10, maxAgeHours: 24 }, assistModel: null, robotCap: 5, judgeMode: 'on' };
+    var TASK_TIMEOUT_MS = 30 * 60 * 1000; // 长任务提示阈值：30 分钟，只提醒不杀（PRD 8.3）
+
+    var token = 'wtk-' + Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10);
+
+    var state = {
+      phase: 'starting', pid: null, httpPort: null,
+      bridge: null, bridgeStatus: null,
+      eventsSeen: 0, lastEventAt: null, recentEvents: [],
+      evByRobot: {},
+      lastError: null, exitCode: null,
+      stdoutOff: 0, stderrOff: 0, lineBuf: '',
+      poll: null, starting: false, stopping: false,
+      sentConfig: null, logs: []
+    };
+
+    var resolvedCwd = null;
+    // 解析会话工作目录（结果缓存；配置表无值时取第一个已注册工作区）
+    async function resolveCwd() {
+      if (resolvedCwd) return resolvedCwd;
+      try {
+        var cfg = await readConfig();
+        if (cfg && typeof cfg.cwd === 'string' && cfg.cwd.trim()) { resolvedCwd = cfg.cwd.trim(); return resolvedCwd; }
+      } catch (e) {}
+      try {
+        if (ctx.workspaceRegistry && ctx.workspaceRegistry.list) {
+          var list = ctx.workspaceRegistry.list();
+          if (list && list.length && list[0] && list[0].path) { resolvedCwd = String(list[0].path); return resolvedCwd; }
+        }
+      } catch (e) {}
+      resolvedCwd = FALLBACK_CWD || (typeof process !== 'undefined' && process.cwd ? process.cwd() : null);
+      return resolvedCwd;
+    }
+    // 统一 Waker 工作区: 不再按项目/固定路径区分执行目录;优先用户 config.cwd(全局一个工作区),
+    // 否则用独立 waker 工作区 ~/.dsh/waker-workspace(进程内缓存, 启动时创建)。
+    async function wakerWorkspaceDir() {
+      if (wakerWorkspaceDir.cache) return wakerWorkspaceDir.cache;
+      var base = null;
+      try {
+        var cfg = await readConfig();
+        if (cfg && typeof cfg.cwd === 'string' && cfg.cwd.trim()) base = cfg.cwd.trim();
+      } catch (e) {}
+      if (!base) {
+        base = (typeof process !== 'undefined' && process.env && process.env.HOME)
+          ? process.env.HOME + '/.dsh/waker-workspace'
+          : (FALLBACK_CWD || (typeof process !== 'undefined' && process.cwd ? process.cwd() : '.'));
+      }
+      wakerWorkspaceDir.cache = base;
+      try {
+        var mk = await ctx.subprocess.resolveExecutable('mkdir');
+        var h = ctx.subprocess.spawn({ argv: [mk, '-p', base], cwd: '/', stdio: { stdin: 'ignore', stdout: { maxBytes: 8192 }, stderr: { maxBytes: 8192 } }, graceMs: 1500 });
+        await h.done;
+      } catch (e) { /* 目录创建失败不阻断任务 */ }
+      return base;
+    }
+
+    // ---- R2.6 Waker 分组工作区: 每个 Waker 一个以其命名的执行子目录 + 独立工作区分组 ----
+    function wakerDirName(name) {
+      var s = String(name || '').trim().replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, '-');
+      return s || '未命名';
+    }
+    async function ensureDir(dir) {
+      try {
+        var mk = await ctx.subprocess.resolveExecutable('mkdir');
+        var h = ctx.subprocess.spawn({ argv: [mk, '-p', dir], cwd: '/', stdio: { stdin: 'ignore', stdout: { maxBytes: 8192 }, stderr: { maxBytes: 8192 } }, graceMs: 1500 });
+        await h.done;
+      } catch (e) { /* 创建失败交给 attach 校验报错 */ }
+    }
+    // 取(或建)路径对应的工作区;create 竞态时回退 resolveByPath。
+    // 路径一律先 realpath 化: attachSession 校验 realpath(会话 cwd) 与 record.path 严格相等,
+    // 而 fs.promises.realpath 会把路径改写为磁盘登记大小写(macOS 大小写不敏感卷上
+    // /go 与 /Go 同目录时返回先建者),注册与查询必须用同一真实形态,否则挂接必失败。
+    var realpathFs = null;
+    async function realpathStr(p) {
+      try {
+        if (!realpathFs) realpathFs = await import('node:fs/promises');
+        return await realpathFs.realpath(p);
+      } catch (e) { return p; }
+    }
+    async function ensureWakerWorkspace(cwd, title) {
+      if (!ctx.workspaceRegistry) return null;
+      var real = await realpathStr(cwd);
+      try {
+        var found = await ctx.workspaceRegistry.resolveByPath(real);
+        if (found) return found;
+      } catch (e) {}
+      try {
+        return await ctx.workspaceRegistry.create(real, title);
+      } catch (e) {
+        try { return await ctx.workspaceRegistry.resolveByPath(real); } catch (e2) { return null; }
+      }
+    }
+
+    // ---- 能力治理: per-waker 生成式 preset(引用全局 skills/MCP,只选不装) ----
+    // 组块 YAML 模板基线: dsh-agent-presets/presets/standard/agent.cordis.yml @DSH 26.x(delegation/compaction 组含 isolate realm,整块拷贝)
+    var WAKER_PRESET_MARKER = '# generated by dsh-waker (wkr-*) — do not edit by hand';
+    var WAKER_PRESET_YAML = {
+      head: [
+        WAKER_PRESET_MARKER,
+        '# 基线: @deepseek-ai/dsh-agent-presets/presets/standard/agent.cordis.yml',
+        '# 本文件由 Waker 能力配置自动生成;编辑会话请使用 Waker 管理 → 详情 → 能力',
+        '',
+        '- id: persona',
+        '  name: \'@deepseek-ai/dsh-persona\'',
+        '  config:',
+        '    text: >-',
+        '      You are a coding agent powered by the {{model}} model. Your working directory is {{cwd}}.',
+        '',
+        '- id: agent-instructions',
+        '  name: \'@deepseek-ai/dsh-agent-instructions\'',
+        '  config:',
+        '    maxBytes: 65536',
+        '',
+        '- id: tool-bash',
+        '  name: \'@deepseek-ai/dsh-tool-bash\'',
+        '',
+        '- id: tool-pwsh',
+        '  name: \'@deepseek-ai/dsh-tool-pwsh\'',
+        '',
+        '- id: tool-fs',
+        '  name: \'@deepseek-ai/dsh-tool-fs\'',
+        '',
+        '- id: tool-fs-search',
+        '  name: \'@deepseek-ai/dsh-tool-fs-search\'',
+        '',
+        '- id: tool-jobs',
+        '  name: \'@deepseek-ai/dsh-tool-jobs\'',
+        ''
+      ],
+      planning: [
+        '- id: planning',
+        '  name: cordis:group',
+        '  group: true',
+        '  isolate:',
+        '    planMode: true',
+        '  config:',
+        '    - id: plan-mode',
+        '      name: \'@deepseek-ai/dsh-plan-mode\'',
+        ''
+      ],
+      compaction: [
+        '- id: compaction',
+        '  name: cordis:group',
+        '  group: true',
+        '  isolate:',
+        '    compaction: true',
+        '    toolResultPruner: true',
+        '  config:',
+        '    - id: compaction-basic',
+        '      name: \'@deepseek-ai/dsh-compaction-basic\'',
+        '',
+        '    - id: tool-result-pruner',
+        '      name: \'@deepseek-ai/dsh-compaction-tool-result-pruner\'',
+        '      config:',
+        '        thresholdChars: 8192',
+        '        headChars: 4096',
+        '        tailChars: 1024',
+        ''
+      ],
+      delegation: [
+        '- id: delegation',
+        '  name: cordis:group',
+        '  group: true',
+        '  isolate:',
+        '    workflowEngine: true',
+        '  config:',
+        '    - id: tool-subagent-control',
+        '      name: \'@deepseek-ai/dsh-tool-subagent-control\'',
+        '',
+        '    - id: tool-subagent-list-agents',
+        '      name: \'@deepseek-ai/dsh-tool-subagent-control/list-agents\'',
+        '',
+        '    - id: tool-subagent',
+        '      name: \'@deepseek-ai/dsh-tool-subagent\'',
+        '      config:',
+        '        provider: spawn',
+        '        toolName: subagent',
+        '        modelSelectionSettings: true',
+        '        backgroundMode: continuable',
+        '',
+        '    - id: tool-subagent-fork',
+        '      name: \'@deepseek-ai/dsh-tool-subagent\'',
+        '      config:',
+        '        provider: fork',
+        '        toolName: subagent_fork',
+        '        backgroundMode: continuable',
+        '',
+        '    - id: workflow-worker-thread',
+        '      name: \'@deepseek-ai/dsh-workflow-worker-thread\'',
+        '      config:',
+        '        provider: spawn',
+        '',
+        '    - id: tool-workflow',
+        '      name: \'@deepseek-ai/dsh-tool-workflow\'',
+        '',
+        '    - id: tool-ralph',
+        '      name: \'@deepseek-ai/dsh-tool-ralph\'',
+        '      config:',
+        '        subagentProvider: spawn',
+        '        maxRounds: 64',
+        ''
+      ],
+      goal: [
+        '- id: command-goal',
+        '  name: \'@deepseek-ai/dsh-command-goal\'',
+        '',
+        '- id: tool-goal',
+        '  name: \'@deepseek-ai/dsh-tool-goal\'',
+        ''
+      ],
+      web: [
+        '- id: tool-web',
+        '  name: \'@deepseek-ai/dsh-tool-web\'',
+        ''
+      ],
+      askuser: [
+        '- id: tool-ask-user',
+        '  name: \'@deepseek-ai/dsh-tool-ask-user\'',
+        ''
+      ],
+      todo: [
+        '- id: tool-todo',
+        '  name: \'@deepseek-ai/dsh-tool-todo\'',
+        ''
+      ],
+      skillFs: function (skillDirs) {
+        var out = ['- id: skill-filesystem', '  name: \'@deepseek-ai/dsh-skill-filesystem\''];
+        if (skillDirs && skillDirs.length) {
+          // 白名单模式: 关默认根,仅引用聚合目录(内含指向全局已装技能的符号链接)
+          out.push('  config:');
+          out.push('    includeDefaultRoots: false');
+          out.push('    customSkillDirs:');
+          for (var i = 0; i < skillDirs.length; i++) out.push('      - ' + JSON.stringify(skillDirs[i]));
+        }
+        // 无技能白名单(全量引用全局默认根)→ 省略 config,与 standard 行为一致
+        return out;
+      },
+      skillTool: [
+        '- id: tool-skill',
+        '  name: \'@deepseek-ai/dsh-tool-skill\'',
+        ''
+      ]
+    };
+    function wakerPresetDir(wakerId) {
+      return (typeof process !== 'undefined' && process.env && process.env.HOME ? process.env.HOME : '') + '/.dsh/.agent-presets/wkr-' + String(wakerId);
+    }
+    async function writePresetFile(dir, file, content) {
+      var node = await ctx.subprocess.resolveExecutable('node');
+      var script = 'const fs=require("fs"),path=require("path");const [dir,file,txt]=process.argv.slice(1);fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(path.join(dir,file),txt,"utf8");process.stdout.write("ok")';
+      var h = ctx.subprocess.spawn({ argv: [node, '-e', script, dir, file, content], cwd: '/', stdio: { stdin: 'ignore', stdout: { maxBytes: 4096 }, stderr: { maxBytes: 8192 } }, graceMs: 3000 });
+      var o = await h.done;
+      if (!o || o.exitCode !== 0) throw new Error('preset 文件写入失败: ' + dir + '/' + file);
+    }
+    async function buildWakerPresetYaml(waker) {
+      var caps = waker.capabilities || {};
+      var groups = Array.isArray(caps.builtinGroups) ? caps.builtinGroups : null;
+      var has = function (id) { return groups === null ? false : groups.indexOf(id) !== -1; };
+      var lines = WAKER_PRESET_YAML.head.slice();
+      if (!groups || groups.indexOf('todo') !== -1) lines = lines.concat(WAKER_PRESET_YAML.todo);
+      lines = lines.concat(WAKER_PRESET_YAML.askuser);
+      if (!groups || has('planning')) lines = lines.concat(WAKER_PRESET_YAML.planning);
+      lines = lines.concat(WAKER_PRESET_YAML.compaction);
+      if (!groups || has('delegation')) lines = lines.concat(WAKER_PRESET_YAML.delegation);
+      if (!groups || has('goal')) lines = lines.concat(WAKER_PRESET_YAML.goal);
+      if (!groups || has('web')) lines = lines.concat(WAKER_PRESET_YAML.web);
+      // skills 组: 白名单技能经符号链接聚合目录引用全局安装
+      var skillDirs = [];
+      // skills===null → 全量(聚合目录不发,skillFs 无 config 走默认根);
+      // skills 为数组(含空)→ 裁剪: 空数组也要建空聚合目录,关闭默认根 = 一个技能都不引用
+      var skillsList = Array.isArray(caps.skills) ? caps.skills : null;
+      if (skillsList !== null) {
+        var agg = await buildWakerSkillDir(waker.id, skillsList);
+        if (agg) skillDirs = [agg];
+      }
+      lines = lines.concat(WAKER_PRESET_YAML.skillFs(skillDirs));
+      lines = lines.concat(WAKER_PRESET_YAML.skillTool);
+      return lines.join('\n') + '\n';
+    }
+    async function buildWakerSkillDir(wakerId, skillNames) {
+      // 聚合目录 ~/.dsh/waker-skills/<wakerId>/: 内放指向 ~/.dsh/skills/<name> 的符号链接(纯引用)
+      var home = await resolveDshHomeDir();
+      if (!home) return null;
+      var aggDir = home + '/waker-skills/' + String(wakerId);
+      var node = await ctx.subprocess.resolveExecutable('node');
+      var script = [
+        'const fs=require("fs"),path=require("path");',
+        'const [agg,home,names]=process.argv.slice(1);',
+        'const list=JSON.parse(names);',
+        'fs.rmSync(agg,{recursive:true,force:true});',
+        'fs.mkdirSync(agg,{recursive:true});',
+        'let n=0;',
+        'for(const nm of list){',
+        ' const src=path.join(home,"skills",nm);',
+        ' try{ if(fs.statSync(path.join(src,"SKILL.md")).isFile()){ fs.symlinkSync(src,path.join(agg,nm),"dir"); n++; } }catch(e){}',
+        '}',
+        'process.stdout.write(String(n));'
+      ].join('');
+      var h = ctx.subprocess.spawn({ argv: [node, '-e', script, aggDir, home, JSON.stringify(skillNames)], cwd: '/', stdio: { stdin: 'ignore', stdout: { maxBytes: 4096 }, stderr: { maxBytes: 8192 } }, graceMs: 5000 });
+      var o = await h.done;
+      if (!o || o.exitCode !== 0) return null;
+      return aggDir;
+    }
+    async function removeWakerPreset(wakerId) {
+      var dir = wakerPresetDir(wakerId);
+      try {
+        var node = await ctx.subprocess.resolveExecutable('node');
+        var script = 'const fs=require("fs");fs.rmSync(process.argv[1],{recursive:true,force:true});process.stdout.write("ok")';
+        var h = ctx.subprocess.spawn({ argv: [node, '-e', script, dir], cwd: '/', stdio: { stdin: 'ignore', stdout: { maxBytes: 4096 }, stderr: { maxBytes: 8192 } }, graceMs: 3000 });
+        await h.done;
+      } catch (e) { note('[preset] 目录清理失败: ' + excerpt(e && e.message, 80)); }
+    }
+    async function ensureWakerPreset(waker) {
+      // capabilities 为空 → 删除生成目录(走 standard);非空 → 生成/更新并验证
+      try {
+        if (!waker || !waker.id || !waker.capabilities) {
+          await removeWakerPreset(waker ? waker.id : '');
+          return null;
+        }
+        var dir = wakerPresetDir(waker.id);
+        var yaml = await buildWakerPresetYaml(waker);
+        var presetYml = [
+          WAKER_PRESET_MARKER,
+          'name: Waker · ' + String(waker.name || waker.id),
+          'description: Waker 专属能力预设(引用全局 skills/MCP,按能力配置生成)',
+          'order: 50',
+          ''
+        ].join('\n');
+        await writePresetFile(dir, 'agent.cordis.yml', yaml);
+        await writePresetFile(dir, 'preset.yml', presetYml);
+        // 立即验证可挂载;失败即回退删除
+        await ctx.agentPresets.resolve('wkr-' + waker.id);
+        note('[preset] 已生成专属预设 wkr-' + waker.id + '(新会话生效)');
+        return 'wkr-' + waker.id;
+      } catch (e) {
+        note('[preset] 生成失败,回退 standard: ' + excerpt(e && e.message, 120));
+        await removeWakerPreset(waker ? waker.id : '');
+        return null;
+      }
+    }
+    // 会话应归属的执行目录与工作区标题(waker 缺省 → 「其他」分组)
+    // 标题统一为纯 Waker 名称: 侧栏分组是纯文本无头像位,不再拼 emoji(展示统一走头像+名称)
+    async function wakerWorkplace(waker) {
+      var base = await wakerWorkspaceDir();
+      var dirName = waker ? wakerDirName(waker.name || waker.id) : '其他';
+      var cwd = base.replace(/\/+$/, '') + '/' + dirName;
+      var title = waker ? String(waker.name || waker.id) : 'Waker 任务';
+      await ensureDir(cwd);
+      var ws = await ensureWakerWorkspace(cwd, title);
+      // 存量工作区标题带着历史 emoji 前缀 → 统一改为纯名称
+      if (ws && ws.title !== title && typeof ws.setTitle === 'function') {
+        try { await Promise.race([ws.setTitle(title), new Promise(function (res) { ctx.timer.setTimeout(res, 5000); })]); } catch (e) {}
+      }
+      return { cwd: cwd, workspace: ws };
+    }
+
+    function rid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 10); }
+    function note(msg) {
+      state.logs.push({ t: Date.now(), msg: String(msg).slice(0, 400) });
+      if (state.logs.length > 60) state.logs.splice(0, state.logs.length - 60);
+    }
+    function excerpt(v, n) {
+      var s = String(v == null ? '' : v).replace(/\s+/g, ' ').trim();
+      return s.length > n ? s.slice(0, n) + '…' : s;
+    }
+    function textOfContent(content) {
+      if (!Array.isArray(content)) return '';
+      return content.filter(function (b) { return b && b.type === 'text'; }).map(function (b) { return b.text || ''; }).join('');
+    }
+    function writeStdin(action) {
+      var handle = state.bridge;
+      if (!handle || !handle.stdin) return false;
+      try { handle.stdin.write(JSON.stringify(action) + '\n'); return true; } catch (e) { note('stdin 写入失败: ' + String((e && e.message) || e)); return false; }
+    }
+    function sendReply(conv, text, opts) {
+      if (!conv) return false;
+      opts = opts || {};
+      return writeStdin({ action: 'reply', conversationId: conv, text: String(text).slice(0, 18000), format: opts.format || 'text', title: opts.title || '', btnTitle: opts.btnTitle || '', btnUrl: opts.btnUrl || '' });
+    }
+
+    // ---- storage domain ----
+    var domain = null;
+    var domainOpening = null;
+    var domainError = null;
+    var objSchema = {
+      parse: function (v) {
+        if (v === null || typeof v !== 'object' || Array.isArray(v)) throw new Error('record must be a plain object');
+        return v;
+      }
+    };
+    ctx.effect(function () {
+      return async function () {
+        if (domainOpening) { try { await domainOpening; } catch (e) {} }
+        if (domain) {
+          var d = domain;
+          domain = null;
+          try { await d.close(); } catch (e) {}
+        }
+      };
+    }, 'waker domain close');
+    try {
+      domainOpening = ctx.storageDomain.open({
+        name: 'dsh_waker',
+        version: 0,
+        tables: {
+          mappings: { valueSchema: objSchema },
+          config: { valueSchema: objSchema },
+          queue: { valueSchema: objSchema },
+          robots: { valueSchema: objSchema },
+          wakers: { valueSchema: objSchema },
+          bindings: { valueSchema: objSchema },
+          projects: { valueSchema: objSchema }
+        }
+      }).then(function (d) { domain = d; })
+        .catch(function (e) { domainError = String((e && e.message) || e); });
+    } catch (e) {
+      domainError = String((e && e.message) || e);
+    }
+
+    async function withDomain(fn) {
+      if (domainOpening) { try { await domainOpening; } catch (e) { throw new Error('存储域打开失败: ' + domainError); } }
+      if (!domain) throw new Error('存储域未就绪: ' + (domainError || 'unknown'));
+      return fn(domain);
+    }
+
+    // ---- repos: robots / wakers / bindings (R2) ----
+    function reposId(prefix) { return prefix + '-' + Math.random().toString(36).slice(2, 10); }
+
+    // entries() 返回 iterator(非 array),统一数组化防 forEach 陷阱
+    function iterPairs(t) {
+      var out = [];
+      var it = t.entries();
+      for (var kv = it.next(); !kv.done; kv = it.next()) out.push(kv.value);
+      return out;
+    }
+
+    async function tableList(name) {
+      return withDomain(async function (d) {
+        var t = d.table(name);
+        // keys()/entries() 返回 iterator(storage-domain 契约),不是数组
+        var out = [];
+        if (typeof t.entries === 'function') {
+          var it = t.entries();
+          for (var kv = it.next(); !kv.done; kv = it.next()) {
+            var rec = kv.value && kv.value[1];
+            if (rec && typeof rec === 'object') out.push(rec);
+          }
+        }
+        return out;
+      });
+    }
+    async function tablePut(name, key, rec) {
+      return withDomain(async function (d) { await d.table(name).put(String(key), rec); });
+    }
+    async function tableDelete(name, key) {
+      return withDomain(async function (d) { await d.table(name).delete(String(key)); });
+    }
+
+    // -- robots --
+    function normalizeScope(scope) {
+      if (!scope || typeof scope !== 'object') return { mode: 'all', convs: [] };
+      var mode = scope.mode === 'whitelist' ? 'whitelist' : 'all';
+      var convs = Array.isArray(scope.convs) ? scope.convs.map(String).filter(Boolean).slice(0, 100) : [];
+      return { mode: mode, convs: convs };
+    }
+    function robotSecretRef(robotId) { return robotId === 'robot-default' ? REF_SECRET : 'DINGTALK_SECRET_' + robotId; }
+    async function listRobots() {
+      var rows = await tableList('robots');
+      rows.sort(function (a, b) { return String(a.id).localeCompare(String(b.id)); });
+      return rows;
+    }
+    async function getRobot(robotId) {
+      return withDomain(function (d) { return d.table('robots').get(String(robotId)) || null; });
+    }
+    async function saveRobot(patch) {
+      var id = String(patch.id || '').trim() || reposId('robot');
+      var cur = await getRobot(id);
+      if (cur && cur.clientId && typeof patch.clientId === 'string' && patch.clientId && patch.clientId !== cur.clientId) {
+        throw new Error('机器人 ' + id + ' 的 Client ID 不可更改（请删除后重建）');
+      }
+      var count = (await listRobots()).length;
+      var cap = (await readConfig()).robotCap;
+      if (!cur && count >= cap) throw new Error('已达机器人上限（' + cap + ' 个）');
+      var rec = {
+        id: id,
+        name: String(patch.name || (cur && cur.name) || id).slice(0, 40),
+        clientId: String((patch.clientId !== undefined ? patch.clientId : (cur && cur.clientId)) || '').trim(),
+        enabled: typeof patch.enabled === 'boolean' ? patch.enabled : (cur ? cur.enabled !== false : true),
+        scope: normalizeScope(patch.scope !== undefined ? patch.scope : (cur && cur.scope)),
+        createdAt: (cur && cur.createdAt) || Date.now()
+      };
+      if (!rec.clientId) throw new Error('clientId required');
+      await tablePut('robots', id, rec);
+      // secret: 有值则写,undefined 不动;显式 null = unset
+      if (patch.secret !== undefined) {
+        try {
+          if (patch.secret === null) await ctx.credentials.unset(robotSecretRef(id));
+          else if (String(patch.secret).trim()) await ctx.credentials.set(robotSecretRef(id), String(patch.secret).trim());
+        } catch (e) { throw new Error('凭据写入失败: ' + String((e && e.message) || e)); }
+      }
+      return rec;
+    }
+    async function deleteRobot(robotId) {
+      var rec = await getRobot(robotId);
+      if (!rec) return { ok: false, error: '机器人不存在' };
+      if (robotId === 'robot-default') return { ok: false, error: '默认机器人不可删除（可停用）' };
+      await tableDelete('robots', robotId);
+      var bindings = await tableList('bindings');
+      for (var i = 0; i < bindings.length; i++) {
+        if (bindings[i].robotId === robotId) await tableDelete('bindings', bindings[i].id);
+      }
+      return { ok: true };
+    }
+    async function secretSet(robotId) {
+      try {
+        var s = await ctx.credentials.resolve(robotSecretRef(robotId));
+        return !!(s && s.value);
+      } catch (e) { return false; }
+    }
+
+    // -- wakers --
+    var BUILTIN_WAKERS = [
+      { id: 'waker-pm', name: '项目经理', emoji: '🧭', role: '需求澄清、拆解、派活、验收标准', triggers: ['新任务:', 'PM:'], systemExtra: '你是研发团队的项目经理 Waker。聚焦:需求澄清、任务拆解、验收标准定义、进度跟进。对模糊需求先追问再动手。', cwdPolicy: { mode: 'follow', path: '' }, concurrencyShare: 1, avatar: '头像-男一.png' },
+      { id: 'waker-dev', name: '全栈开发', emoji: '💻', role: '功能实现、修 bug、重构', triggers: ['开发:', 'Dev:'], systemExtra: '你是全栈开发 Waker。聚焦:功能实现、bug 修复、代码重构。改动保持最小可用,完成后给出变更摘要。', cwdPolicy: { mode: 'follow', path: '' }, concurrencyShare: 1, avatar: '头像-男二.png' },
+      { id: 'waker-qa', name: '测试', emoji: '🧪', role: '用例设计、回归清单、验收测试', triggers: ['测试:', 'QA:'], systemExtra: '你是测试 Waker。聚焦:测试用例设计、回归清单、验收测试执行。输出结构化用例与结论。', cwdPolicy: { mode: 'follow', path: '' }, concurrencyShare: 1, avatar: '头像-女一.png' },
+      { id: 'waker-reviewer', name: '代码审查', emoji: '🔍', role: 'PR 审查、风险识别、规范检查', triggers: ['审查:', 'Review:'], systemExtra: '你是代码审查 Waker。聚焦:PR 审查、风险识别、规范一致性检查。按严重度分级输出发现。', cwdPolicy: { mode: 'follow', path: '' }, concurrencyShare: 1, avatar: '头像-男三.png' },
+      { id: 'waker-docs', name: '文档', emoji: '📝', role: 'README、API 文档、变更日志', triggers: ['文档:', 'Docs:'], systemExtra: '你是文档 Waker。聚焦:README、API 文档、变更日志的编写与更新。文风简洁、示例优先。', cwdPolicy: { mode: 'follow', path: '' }, concurrencyShare: 1, avatar: '头像-女二.png' },
+      { id: 'waker-ops', name: '运维', emoji: '🔧', role: '部署脚本、环境排查、定时巡检', triggers: ['运维:', 'Ops:'], systemExtra: '你是运维 Waker。聚焦:部署脚本、环境问题排查、巡检。操作谨慎,破坏性命令先确认。', cwdPolicy: { mode: 'follow', path: '' }, concurrencyShare: 1, avatar: '头像-男四.png' }
+    ];
+    // capabilities 归一化: 白名单全部引用全局名字(内置能力组 id / mcp__ 工具全名 / 全局技能目录名)。
+    // null = 不裁剪(继承 standard 全量);数组 = 白名单。全局卸载后引用自然失效(会话启动时求交)。
+    function normalizeStrList(v, max) {
+      if (v === null || v === undefined) return null;
+      if (!Array.isArray(v)) return null;
+      var out = [];
+      for (var i = 0; i < v.length; i++) {
+        var t = String(v[i] || '').trim();
+        if (t && out.indexOf(t) === -1) out.push(t);
+        if (out.length >= max) break;
+      }
+      return out;
+    }
+    function normalizeCapabilities(c) {
+      if (!c || typeof c !== 'object') return null;
+      var hasAny = c.builtinGroups !== null && c.builtinGroups !== undefined
+        || c.mcpServers !== null && c.mcpServers !== undefined
+        || c.mcpTools !== null && c.mcpTools !== undefined
+        || c.skills !== null && c.skills !== undefined;
+      if (!hasAny) return null;
+      return {
+        ver: 1,
+        builtinGroups: normalizeStrList(c.builtinGroups, 20),
+        mcpServers: normalizeStrList(c.mcpServers, 20),
+        mcpTools: normalizeStrList(c.mcpTools, 100),
+        skills: normalizeStrList(c.skills, 100)
+      };
+    }
+
+    function normalizeWakerRec(rec, builtin) {
+      return {
+        id: String(rec.id || ''), name: String(rec.name || '').slice(0, 40), emoji: String(rec.emoji || '🤖').slice(0, 4),
+        role: String(rec.role || '').slice(0, 200), presetId: String(rec.presetId || '').trim(),
+        systemExtra: String(rec.systemExtra || '').slice(0, 4000),
+        cwdPolicy: (rec.cwdPolicy && rec.cwdPolicy.mode === 'fixed' && rec.cwdPolicy.path) ? { mode: 'fixed', path: String(rec.cwdPolicy.path) } : { mode: 'follow', path: '' },
+        projectId: rec.projectId ? String(rec.projectId) : '',
+        avatar: String(rec.avatar || '').replace(/[\/\\]/g, '').slice(0, 120),
+        concurrencyShare: (typeof rec.concurrencyShare === 'number' && rec.concurrencyShare >= 1 && rec.concurrencyShare <= 5) ? Math.round(rec.concurrencyShare) : 1,
+        enabled: rec.enabled !== false,
+        builtin: !!builtin,
+        triggers: Array.isArray(rec.triggers) ? rec.triggers.map(String).map(function (s) { return s.trim(); }).filter(Boolean).slice(0, 10) : [],
+        capabilities: normalizeCapabilities(rec.capabilities),
+        createdAt: rec.createdAt || Date.now()
+      };
+    }
+
+    // ---- projects: 来源项目(公开 / Waker 专属;本地目录 / Git 仓库) ----
+    function normalizeWakerIds(v) {
+      var out = [];
+      var src = Array.isArray(v) ? v : (typeof v === 'string' && v ? [v] : []);
+      for (var i = 0; i < src.length; i++) {
+        var t = String(src[i] || '').trim();
+        if (t && out.indexOf(t) === -1) out.push(t);
+      }
+      return out;
+    }
+    function normalizeProjectRec(rec) {
+      var scope = rec.scope === 'waker' ? 'waker' : 'public';
+      var kind = rec.kind === 'git' ? 'git' : 'local';
+      var ownerIds = normalizeWakerIds(rec.ownerWakerIds);
+      // 旧数据兼容: 单 ownerWakerId 并入数组
+      if (scope === 'waker' && !ownerIds.length && rec.ownerWakerId) ownerIds = [String(rec.ownerWakerId).trim()];
+      return {
+        id: String(rec.id || ''), name: String(rec.name || '').slice(0, 80),
+        scope: scope, ownerWakerIds: scope === 'waker' ? ownerIds : [],
+        kind: kind,
+        path: kind === 'local' ? String(rec.path || '').trim() : '',
+        gitUrl: kind === 'git' ? String(rec.gitUrl || '').trim() : '',
+        branch: kind === 'git' ? String(rec.branch || 'main').trim() || 'main' : '',
+        localPath: String(rec.localPath || '').trim(),
+        status: rec.status === 'error' ? 'error' : 'ready',
+        lastError: rec.status === 'error' ? (rec.lastError || null) : null,
+        createdAt: rec.createdAt || Date.now(), updatedAt: rec.updatedAt || Date.now()
+      };
+    }
+    async function listProjects(opts) {
+      var rows = await tableList('projects');
+      rows.sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); });
+      return rows;
+    }
+    async function getProject(pid) {
+      return withDomain(function (d) { return d.table('projects').get(String(pid)) || null; });
+    }
+    // 触发 Waker 能用的项目: 公开 或 ownerWakerIds 含该 Waker
+    function projectsVisibleTo(rows, wakerId) {
+      return rows.filter(function (p) {
+        if (p.scope === 'public') return true;
+        if (!wakerId) return false;
+        var ids = p.ownerWakerIds || (p.ownerWakerId ? [p.ownerWakerId] : []);
+        return ids.indexOf(wakerId) !== -1;
+      });
+    }
+    // 解析项目落点目录(local=path;git=localPath;git 未 ready(克隆失败)不可用)
+    function projectDir(p) {
+      if (!p) return null;
+      if (p.kind === 'git') {
+        return (p.status === 'ready' && p.localPath) ? p.localPath : null;
+      }
+      return p.path || null;
+    }
+    // 项目权限硬约束: 计算本次任务会话的根目录。
+    // 会话沙箱(workspace-write)的唯一可写根 = 会话 cwd,因此 cwd 只允许落在
+    // {Waker 工作区 ∪ 该 Waker 已授权且目录存在(就绪)的项目} 内,授权清单之外
+    // 的路径永远无法成为会话根 → 沙箱物理拒绝一切越权写入。
+    // 返回 { project, dir } | null(null = 落在 Waker 工作区)。
+    async function pickProjectRoot(waker, text) {
+      var fs = ctx.get ? ctx.get('fs') : null;
+      var rows = [];
+      try { rows = await listProjects(); } catch (e) { return null; }
+      var visible = projectsVisibleTo(rows, waker ? waker.id : null);
+      var ready = [];
+      for (var i = 0; i < visible.length; i++) {
+        var dir = projectDir(visible[i]);
+        if (!dir) continue;
+        dir = String(dir).replace(/\/+$/, '');
+        if (!dir || dir === '/') continue;
+        // local 项目不校验克隆状态,但目录必须真实存在且是目录(否则 bash 无法以它为 cwd)
+        var ok = false;
+        if (fs && typeof fs.resolve === 'function') {
+          try {
+            var tgt = await fs.resolve(dir);
+            var info = tgt ? await fs.stat(tgt) : null;
+            ok = !!info && info.type === 'directory';
+          } catch (e) { ok = false; }
+        } else {
+          ok = true; // fs 服务缺失时退回配置即信(不阻塞投递)
+        }
+        if (ok) ready.push({ project: visible[i], dir: dir });
+      }
+      if (!ready.length) return null;
+      // 显式提及: 任务文本命中项目名/路径末段/仓库名副(大小写不敏感,>=2 字符)
+      var t = String(text || '').toLowerCase();
+      var hit = null;
+      for (var j = 0; j < ready.length && !hit; j++) {
+        var p = ready[j].project;
+        var names = [String(p.name || '')];
+        if (p.path) {
+          var seg = String(p.path).split('/').filter(Boolean).pop();
+          if (seg) names.push(String(seg));
+        }
+        if (p.gitUrl) {
+          var m = String(p.gitUrl).match(/\/([^\/]+?)(?:\.git)?\/?$/);
+          if (m) names.push(String(m[1]));
+        }
+        for (var k = 0; k < names.length; k++) {
+          var nm = names[k].toLowerCase();
+          if (nm && nm.length >= 2 && t.indexOf(nm) !== -1) { hit = ready[j]; break; }
+        }
+      }
+      if (hit) return hit;
+      // 单就绪项目 Waker: 所有会话默认落在该项目(常见形态: 一人一项目)
+      if (ready.length === 1) return ready[0];
+      // 多项目且未点名: 落回 Waker 工作区(项目只读),提示词告知用户点名项目以获得可写会话
+      return null;
+    }
+    // 生成「项目权限」系统提示段: 清单 + 当前根 + 纪律(强制约束的告知面)
+    function projectSectionText(waker, ready, active, workCwd) {
+      var lines = [];
+      lines.push('【项目权限(平台沙箱强制,不可绕过)】');
+      if (ready && ready.length) {
+        for (var i = 0; i < ready.length; i++) {
+          var p = ready[i].project;
+          var kind = p.kind === 'git' ? 'Git' : '本地';
+          var br = p.branch ? '(分支 ' + p.branch + ')' : '';
+          lines.push('- ' + (p.name || p.id) + '(' + kind + '): ' + ready[i].dir + br);
+        }
+      } else {
+        lines.push('- (无)你当前没有任何已授权项目。');
+      }
+      lines.push('当前会话根目录: ' + workCwd + '。这是你唯一可写入的目录(平台沙箱强制;读取不受限但请遵守上述授权范围,不要读取或引用清单外的路径)。');
+      if (active) {
+        lines.push('本会话根目录即项目「' + (active.project.name || active.project.id) + '」的目录:你可以直接修改该项目;其余已授权项目在本会话中不可写,如需修改请告知用户该会话只能操作当前项目。');
+      } else if (ready && ready.length) {
+        var names = [];
+        for (var j = 0; j < ready.length; j++) names.push(ready[j].project.name || ready[j].project.id);
+        lines.push('本会话根目录是你的工作区(非项目目录):所有已授权项目在本会话中不可写。若用户要求修改项目,请说明需要指明项目名称开启对应会话。你拥有权限的项目: ' + names.join('、') + '。');
+      }
+      lines.push('当用户询问你拥有什么项目权限/能访问哪些项目时:如实、完整地列出上面全部已授权项目(名称、类型、路径、分支),不夸大不遗漏;没有就直说没有。');
+      return lines.join('\n');
+    }
+    async function ensureParentDir(dir) {
+      try {
+        var mk = await ctx.subprocess.resolveExecutable('mkdir');
+        var idx = dir.lastIndexOf('/');
+        var parent = idx > 0 ? dir.slice(0, idx) : '/';
+        var h = ctx.subprocess.spawn({ argv: [mk, '-p', parent], cwd: '/', stdio: { stdin: 'ignore', stdout: { maxBytes: 8192 }, stderr: { maxBytes: 8192 } }, graceMs: 1500 });
+        await h.done;
+      } catch (e) { /* 父目录创建失败交给 git 报错 */ }
+    }
+    // 一次 git 命令执行,返回 stdout/stderr 文本;非零退出抛错
+    async function gitRun(cmd, label) {
+      var git = null;
+      try { git = await ctx.subprocess.resolveExecutable('git'); } catch (e) { git = null; }
+      if (!git) throw new Error('未找到 git 可执行文件');
+      var argv = [git].concat(cmd);
+      var h = ctx.subprocess.spawn({ argv: argv, cwd: '/', stdio: { stdin: 'ignore', stdout: { maxBytes: 262144 }, stderr: { maxBytes: 262144 } }, graceMs: 2000 });
+      var outTxt = '', errTxt = '';
+      var a = 0, b = 0;
+      var reads = function () {
+        try { var o = h.collected.stdout.readFrom(a); a = o.nextOffset; outTxt += o.text; } catch (e) {}
+        try { var er = h.collected.stderr.readFrom(b); b = er.nextOffset; errTxt += er.text; } catch (e) {}
+      };
+      reads();
+      var pt = ctx.timer.interval(reads, 120);
+      var outcome;
+      try { outcome = await h.done; } finally { if (pt) pt(); }
+      reads();
+      if (outcome && outcome.exitCode !== 0) {
+        throw new Error(label + ' 失败(code ' + outcome.exitCode + '): ' + (errTxt || outTxt || '').slice(0, 300));
+      }
+      return { out: outTxt, err: errTxt };
+    }
+    // avatar IO: 经子进程 node avatar-io.cjs(dir 由宿主 AVATAR_DIR 提供;避免宿主 ESM 无法 require fs)
+    var AVATAR_IO_PATH = new URL('../avatar-io.cjs', import.meta.url).pathname; // pkg/avatar-io.cjs (build 复制自 src/avatar-io.cjs)
+    async function avatarRun(cmd, file, stdinBuf) {
+      var node = await ctx.subprocess.resolveExecutable('node');
+      var argv = [node, AVATAR_IO_PATH, cmd, AVATAR_DIR, file || ''];
+      var h = ctx.subprocess.spawn({ argv: argv, cwd: '/', stdio: { stdin: stdinBuf ? 'pipe' : 'ignore', stdout: { maxBytes: 262144 }, stderr: { maxBytes: 262144 } }, graceMs: 3000 });
+      var outTxt = '', errTxt = '';
+      var a = 0, b = 0;
+      var reads = function () {
+        try { var o = h.collected.stdout.readFrom(a); a = o.nextOffset; outTxt += o.text; } catch (e) {}
+        try { var er = h.collected.stderr.readFrom(b); b = er.nextOffset; errTxt += er.text; } catch (e) {}
+      };
+      reads();
+      var pt = ctx.timer.interval(reads, 120);
+      var outcome;
+      try {
+        if (stdinBuf) { try { h.stdin.write(stdinBuf); } catch (e) {} try { h.stdin.end(); } catch (e) {} }
+        outcome = await h.done;
+      } finally { if (pt) pt(); }
+      reads();
+      if (outcome && outcome.exitCode !== 0) throw new Error((errTxt || outTxt || '').trim().slice(0, 200) || ('avatar ' + cmd + ' failed'));
+      var txt = (outTxt || '').trim();
+      try { return txt ? JSON.parse(txt) : {}; } catch (e) { return { file: txt }; }
+    }
+    async function listAvatars() {
+      var items = await avatarRun('list', '');
+      if (!Array.isArray(items)) items = [];
+      return items;
+    }
+    async function uploadAvatar(name, b64) {
+      if (!b64) throw new Error('缺少图片数据');
+      var m = /^data:image\/(png|jpeg|jpg|webp|gif);base64,([A-Za-z0-9+/=]+)$/.exec(String(b64));
+      if (!m) throw new Error('仅支持 png/jpg/webp/gif 图片(base64)');
+      var ext = m[1] === 'jpeg' ? 'jpg' : m[1];
+      var buf = Buffer.from(m[2], 'base64');
+      if (!buf.length || buf.length > AVATAR_MAX_BYTES) throw new Error('图片为空或超过 3MB');
+      var base = String(name || 'avatar').replace(/[^\w.\-\u4e00-\u9fa5 ]/g, '').slice(0, 40) || 'avatar';
+      if (!/\.(png|jpe?g|webp|gif)$/i.test(base)) base += '.' + ext;
+      else base = base.replace(/\.(png|jpe?g|webp|gif)$/i, '.' + ext);
+      var r = await avatarRun('write', base, buf);
+      return r.file || base;
+    }
+    async function deleteAvatar(file) {
+      var r = await avatarRun('delete', file || '');
+      return r;
+    }
+    // 判断目录是否已是 git 工作树
+    async function gitDirExists(dir) {
+      try {
+        await gitRun(['-C', dir, 'rev-parse', '--is-inside-work-tree'], 'git 检测');
+        return true;
+      } catch (e) { return false; }
+    }
+    // gitSync: 目录为空 → clone;已是仓库 → 换分支 fetch+checkout 或 pull
+    async function gitSync(p, clone, forceBranch) {
+      var dir = p.localPath || p.path || '';
+      if (!dir) throw new Error('项目落点目录为空');
+      var existing = await gitDirExists(dir);
+      var needClone = (clone && !existing);
+      if (needClone) {
+        await gitRun(['clone', '--branch', p.branch || 'main', '--single-branch', p.gitUrl, dir], 'git clone');
+        return;
+      }
+      if (existing) {
+        // 已存在仓库:先取远程指定分支,再切分支(forceBranch 或 clone=true 时都要保证切到配置分支)
+        var want = forceBranch || clone || p.branch;
+        if (want && p.branch) {
+          try { await gitRun(['-C', dir, 'fetch', 'origin', p.branch], 'git fetch'); } catch (e) { /* 远程分支不存在等情况,继续尝试 checkout 报真实错 */ }
+          await gitRun(['-C', dir, 'checkout', p.branch], 'git checkout');
+          await gitRun(['-C', dir, 'pull', '--ff-only'], 'git pull');
+        } else {
+          await gitRun(['-C', dir, 'pull', '--ff-only'], 'git pull');
+        }
+        return;
+      }
+      // 目录存在但不是 git 仓库: 清空目录内文件后 clone 进去
+      await gitRun(['clone', '--branch', p.branch || 'main', '--single-branch', p.gitUrl, dir], 'git clone');
+    }
+    async function listWakers(opts) {
+      var rows = await tableList('wakers');
+      if (!(opts && opts.includeDisabled)) rows = rows.filter(function (r) { return r.enabled !== false; });
+      rows.sort(function (a, b) { return String(a.id).localeCompare(String(b.id)); });
+      return rows;
+    }
+    async function getWaker(wakerId) {
+      return withDomain(function (d) {
+        var rec = d.table('wakers').get(String(wakerId)) || null;
+        if (rec && rec.id) wakerCache.set(rec.id, { emoji: rec.emoji || '', name: rec.name || rec.id });
+        return rec;
+      });
+    }
+    async function saveWaker(patch) {
+      var id = String(patch.id || '').trim() || reposId('waker');
+      var cur = await getWaker(id);
+      var merged = Object.assign({}, cur || {}, patch, { id: id });
+      var rec = normalizeWakerRec(merged, cur ? cur.builtin : false);
+      if (!rec.name) throw new Error('name required');
+      if (!rec.presetId) {
+        var def = await ctx.agentPresets.resolve();
+        rec.presetId = def.id;
+      }
+      await tablePut('wakers', id, rec);
+      // 能力治理: capabilities 变化(或首次带配置保存)时同步生成/清理专属预设
+      try {
+        var capsChanged = JSON.stringify(cur && cur.capabilities || null) !== JSON.stringify(rec.capabilities || null);
+        if (capsChanged || rec.capabilities) await ensureWakerPreset(rec);
+      } catch (e) { note('[preset] 保存后同步失败: ' + excerpt(e && e.message, 100)); }
+      return rec;
+    }
+    async function deleteWaker(wakerId) {
+      var rec = await getWaker(wakerId);
+      if (!rec) return { ok: false, error: 'Waker 不存在' };
+      if (rec.builtin) return { ok: false, error: '预置 Waker 不可删除（可停用或恢复默认）' };
+      var active = live.get((await findMappingByWaker(wakerId)) || '');
+      var bindings = await tableList('bindings');
+      var refs = bindings.filter(function (b) { return (b.wakerPool || []).indexOf(wakerId) !== -1; });
+      if (refs.length) {
+        return { ok: false, needsConfirm: true, error: '该 Waker 被 ' + refs.length + ' 条 @Waker 绑定引用，删除将同时从绑定中移除' };
+      }
+      await tableDelete('wakers', wakerId);
+      await removeWakerPreset(wakerId);
+      return { ok: true };
+    }
+    async function deleteWakerConfirmed(wakerId) {
+      var rec = await getWaker(wakerId);
+      if (!rec) return { ok: false, error: 'Waker 不存在' };
+      if (rec.builtin) return { ok: false, error: '预置 Waker 不可删除' };
+      var bindings = await tableList('bindings');
+      for (var i = 0; i < bindings.length; i++) {
+        var b = bindings[i];
+        if ((b.wakerPool || []).indexOf(wakerId) !== -1) {
+          var pool = (b.wakerPool || []).filter(function (w) { return w !== wakerId; });
+          if (!pool.length) pool.push(b.defaultWakerId ? b.defaultWakerId : 'waker-dev');
+          var patch = { wakerPool: pool, defaultWakerId: b.defaultWakerId || pool[0] };
+          await tablePut('bindings', b.id, Object.assign({}, b, patch));
+        }
+      }
+      await tableDelete('wakers', wakerId);
+      await removeWakerPreset(wakerId);
+      return { ok: true };
+    }
+    async function findMappingByWaker(wakerId) { return null; } // 占位:活跃任务检查走 live 扫描(见 activeForWaker)
+    function activeForWaker(wakerId) {
+      var n = 0;
+      live.forEach(function (entry, sessionId) { if (entry.wakerId === wakerId) n++; });
+      return n;
+    }
+    async function resetBuiltinWakers() {
+      for (var i = 0; i < BUILTIN_WAKERS.length; i++) {
+        var src = BUILTIN_WAKERS[i];
+        var cur = await getWaker(src.id);
+        var rec = normalizeWakerRec(Object.assign({}, src, { enabled: cur ? cur.enabled !== false : true }), true);
+        await tablePut('wakers', src.id, rec);
+      }
+      return { reset: BUILTIN_WAKERS.length };
+    }
+
+    // -- bindings --
+    function normalizeBindingRec(rec) {
+      // 迁移兼容: 旧记录带 defaultWakerId / routing.prefixes,读时兼容保留;UI 与路由不再使用
+      function normModel(m) {
+        if (m && typeof m === 'object' && typeof m.provider === 'string' && m.provider && typeof m.model === 'string' && m.model) return { provider: m.provider, model: m.model };
+        return null;
+      }
+      return {
+        id: String(rec.id || ''),
+        robotId: String(rec.robotId || ''),
+        scope: normalizeScope(rec.scope),
+        defaultWakerId: String(rec.defaultWakerId || ''),
+        wakerPool: Array.isArray(rec.wakerPool) ? rec.wakerPool.map(String).filter(Boolean).slice(0, 20) : [],
+        routing: { prefixes: {} },
+        taskModel: normModel(rec.taskModel),
+        assistModel: normModel(rec.assistModel),
+        judgeMode: rec.judgeMode === 'off' ? 'off' : 'on',
+        enabled: rec.enabled !== false,
+        createdAt: rec.createdAt || Date.now()
+      };
+    }
+    async function listBindings() {
+      var rows = await tableList('bindings');
+      rows.sort(function (a, b) { return String(a.id).localeCompare(String(b.id)); });
+      return rows;
+    }
+    async function getBinding(bindingId) {
+      return withDomain(function (d) { return d.table('bindings').get(String(bindingId)) || null; });
+    }
+    async function saveBinding(patch) {
+      var id = String(patch.id || '').trim() || reposId('binding');
+      var cur = await getBinding(id);
+      var merged = Object.assign({}, cur || {}, patch, { id: id });
+      var rec = normalizeBindingRec(merged);
+      if (!rec.robotId) throw new Error('robotId required');
+      var robot = await getRobot(rec.robotId);
+      if (!robot) throw new Error('机器人不存在: ' + rec.robotId);
+      if (!rec.wakerPool.length) throw new Error('至少选择一个 Waker');
+      // 池首成员为兜底: defaultWakerId 仅作旧版字段兼容,若缺失以池首补齐
+      if (!rec.defaultWakerId) rec.defaultWakerId = rec.wakerPool[0];
+      var fallback = await getWaker(rec.wakerPool[0]);
+      if (!fallback) throw new Error('Waker 不存在: ' + rec.wakerPool[0]);
+      await tablePut('bindings', id, rec);
+      return rec;
+    }
+    async function deleteBinding(bindingId) {
+      var rec = await getBinding(bindingId);
+      if (!rec) return { ok: false, error: '绑定不存在' };
+      await tableDelete('bindings', bindingId);
+      return { ok: true };
+    }
+
+    // -- ensureRepos: 一次性迁移与播种(幂等,表空才写) --
+    var reposReady = null;
+    function ensureRepos() {
+      if (!reposReady) {
+        reposReady = (async function () {
+          // 1) 机器人迁移:MVP 全局 clientId → robot-default
+          var robots = await listRobots();
+          if (!robots.length) {
+            var cfg = await readConfig();
+            if (cfg.clientId) {
+              await tablePut('robots', 'robot-default', {
+                id: 'robot-default', name: '默认机器人', clientId: cfg.clientId, enabled: true,
+                scope: { mode: 'all', convs: [] }, createdAt: Date.now()
+              });
+              note('已迁移 MVP 全局凭据为默认机器人 robot-default');
+            }
+          }
+          // 2) Waker 播种:无 builtin 记录 → 播 6 预置;存量 builtin 缺 avatar → 回填默认
+          var wakers = await tableList('wakers');
+          var hasBuiltin = wakers.some(function (w) { return w.builtin; });
+          var B_AV = {};
+          for (var bi = 0; bi < BUILTIN_WAKERS.length; bi++) B_AV[BUILTIN_WAKERS[bi].id] = BUILTIN_WAKERS[bi].avatar || '';
+          for (var bw = 0; bw < wakers.length; bw++) {
+            if (wakers[bw].builtin && !String(wakers[bw].avatar || '').trim() && B_AV[wakers[bw].id]) {
+              await tablePut('wakers', wakers[bw].id, Object.assign({}, wakers[bw], { avatar: B_AV[wakers[bw].id] }));
+              wakers[bw].avatar = B_AV[wakers[bw].id];
+            }
+          }
+          if (!hasBuiltin) {
+            var defPreset = await ctx.agentPresets.resolve();
+            for (var i = 0; i < BUILTIN_WAKERS.length; i++) {
+              var rec = normalizeWakerRec(Object.assign({ presetId: defPreset.id }, BUILTIN_WAKERS[i]), true);
+              await tablePut('wakers', rec.id, rec);
+            }
+            note('已播种 ' + BUILTIN_WAKERS.length + ' 个预置 Waker');
+          }
+          // 3) 默认绑定:每个 enabled 机器人一条
+          var bindings = await listBindings();
+          if (!bindings.length) {
+            robots = await listRobots();
+            var wks = await listWakers();
+            var dev = wks.filter(function (w) { return w.id === 'waker-dev'; })[0] || wks[0];
+            if (dev) {
+              for (var j = 0; j < robots.length; j++) {
+                var r = robots[j];
+                if (r.enabled === false) continue;
+                var b = normalizeBindingRec({
+                  id: 'binding-' + r.id, robotId: r.id, scope: { mode: 'all', convs: [] },
+                  defaultWakerId: dev.id, wakerPool: wks.map(function (w) { return w.id; }),
+                  routing: { prefixes: {} }, enabled: true
+                });
+                await tablePut('bindings', b.id, b);
+              }
+              if (robots.length) note('已为现有机器人创建默认 @Waker 绑定');
+            }
+          }
+          // 4) projects 表声明占位:真正记录走 RPC
+          await withDomain(function (d) { d.table('projects'); });
+        })().catch(function (e) {
+          note('repos 迁移失败: ' + String((e && e.message) || e));
+          reposReady = null;
+          throw e;
+        });
+      }
+      return reposReady;
+    }
+
+    async function readConfig() {
+      try {
+        return await withDomain(function (d) {
+          var rec = d.table('config').get('config');
+          var src = (rec && typeof rec === 'object') ? rec : {};
+          var out = Object.assign({}, DEFAULTS);
+          if (typeof src.clientId === 'string') out.clientId = src.clientId;
+          if (typeof src.autoStart === 'boolean') out.autoStart = src.autoStart;
+          if (typeof src.concurrencyCap === 'number' && src.concurrencyCap >= 1 && src.concurrencyCap <= 5) out.concurrencyCap = src.concurrencyCap;
+          if (src.contextWindow && typeof src.contextWindow === 'object') {
+            var cw = src.contextWindow;
+            out.contextWindow = {
+              maxMessages: (typeof cw.maxMessages === 'number' && cw.maxMessages >= 1 && cw.maxMessages <= 50) ? Math.round(cw.maxMessages) : DEFAULTS.contextWindow.maxMessages,
+              maxAgeHours: (typeof cw.maxAgeHours === 'number' && cw.maxAgeHours >= 1 && cw.maxAgeHours <= 168) ? Math.round(cw.maxAgeHours) : DEFAULTS.contextWindow.maxAgeHours
+            };
+          }
+          if (src.assistModel && typeof src.assistModel === 'object' && typeof src.assistModel.provider === 'string' && typeof src.assistModel.model === 'string') out.assistModel = { provider: src.assistModel.provider, model: src.assistModel.model };
+          if (typeof src.robotCap === 'number' && src.robotCap >= 1 && src.robotCap <= 20) out.robotCap = Math.round(src.robotCap);
+          if (src.judgeMode === 'on' || src.judgeMode === 'off') out.judgeMode = src.judgeMode;
+          return out;
+        });
+      } catch (e) {
+        note('读取配置失败: ' + String((e && e.message) || e));
+        return Object.assign({}, DEFAULTS);
+      }
+    }
+
+    async function writeConfig(patch) {
+      return withDomain(async function (d) {
+        var table = d.table('config');
+        var cur = await readConfig();
+        var next = Object.assign({}, cur);
+        if (typeof patch.clientId === 'string') next.clientId = patch.clientId;
+        if (typeof patch.autoStart === 'boolean') next.autoStart = patch.autoStart;
+        if (typeof patch.concurrencyCap === 'number') next.concurrencyCap = Math.max(1, Math.min(5, Math.round(patch.concurrencyCap)));
+        if (patch.contextWindow && typeof patch.contextWindow === 'object') next.contextWindow = {
+          maxMessages: (typeof patch.contextWindow.maxMessages === 'number') ? Math.max(1, Math.min(50, Math.round(patch.contextWindow.maxMessages))) : next.contextWindow.maxMessages,
+          maxAgeHours: (typeof patch.contextWindow.maxAgeHours === 'number') ? Math.max(1, Math.min(168, Math.round(patch.contextWindow.maxAgeHours))) : next.contextWindow.maxAgeHours
+        };
+        if (patch.assistModel === null) next.assistModel = null;
+        else if (patch.assistModel && typeof patch.assistModel.provider === 'string' && typeof patch.assistModel.model === 'string') next.assistModel = { provider: patch.assistModel.provider, model: patch.assistModel.model };
+        if (typeof patch.judgeMode === 'string' && (patch.judgeMode === 'on' || patch.judgeMode === 'off')) next.judgeMode = patch.judgeMode;
+        await table.put('config', next);
+        return next;
+      });
+    }
+
+    async function pushConfig(force) {
+      // v4: 等价于 pushRobots(仅 robot-default 场景的薄壳),保留旧调用兼容
+      return pushRobots(force);
+    }
+
+    // R2 v4: 多机器人全量 diff 下发(robots-config 动作)。
+    // - enabled 机器人:clientId+secret 齐全才下发;secret 缺失跳过并记日志
+    // - disabled 机器人:桥接侧断开(diff 不含即断)
+    // - marker 去重:全量指纹未变则跳过(bridge 每次重连凭证不变也无需重发)
+    async function pushRobots(force) {
+      var handle = state.bridge;
+      if (!handle || !handle.stdin) return { ok: false, error: '桥接进程未运行' };
+      try { await ensureRepos(); } catch (e) { return { ok: false, error: 'repos 未就绪' }; }
+      var robots = await listRobots();
+      if (!robots.length) return { ok: false, error: '尚无机器人记录' };
+      var payload = [];
+      var skipped = [];
+      for (var i = 0; i < robots.length; i++) {
+        var r = robots[i];
+        if (r.enabled === false) continue;
+        if (!r.clientId) { skipped.push(r.id + ': 缺 Client ID'); continue; }
+        var sv = '';
+        try {
+          var s = await ctx.credentials.resolve(robotSecretRef(r.id));
+          sv = (s && s.value) ? s.value : '';
+        } catch (e) {}
+        if (!sv) { skipped.push(r.id + ': 缺 Client Secret(' + robotSecretRef(r.id) + ')'); continue; }
+        payload.push({ robotId: r.id, clientId: r.clientId, clientSecret: sv });
+      }
+      if (!payload.length) return { ok: false, error: '无可用机器人凭据（' + skipped.join('; ') + '）' };
+      var marker = payload.map(function (p) { return p.robotId + '\u0000' + p.clientId + '\u0000' + p.clientSecret; }).join('\u0001');
+      if (!force && state.sentConfig === marker) return { ok: true, unchanged: true };
+      if (!writeStdin({ action: 'robots-config', robots: payload })) return { ok: false, error: '无法写入桥接进程 stdin' };
+      state.sentConfig = marker;
+      note('已下发 ' + payload.length + ' 个机器人配置' + (skipped.length ? '（跳过: ' + skipped.join('; ') + '）' : ''));
+      return { ok: true, count: payload.length, skipped: skipped };
+    }
+
+    // ---- task pipeline ----
+    var live = new Map();
+    var running = new Map();
+    var starting = new Set();
+    var queueMem = [];
+    var recentTurns = [];
+    var seqCounter = Date.now();
+    var pumping = false;
+    var QUEUE_PREFIX = /^新任务[:：,，\s]*/;
+    var watchdogs = new Map(); // conv -> timer disposer
+
+    function recordTurn(conv, phase, text) {
+      recentTurns.push({ t: Date.now(), conv: excerpt(conv, 12), phase: String(phase), text: excerpt(text || '', 60) });
+      if (recentTurns.length > 40) recentTurns.splice(0, recentTurns.length - 40);
+    }
+    // 并发计数: 同一会话可能同时存在于 starting(已投递)与 running(agent/status)中,
+    // 必须按并集计数,否则上限被重复占用、队列停滞(实际并发退化为 1)。
+    function activeCount() {
+      var extra = 0;
+      starting.forEach(function (sid) { if (!running.has(sid)) extra++; });
+      return running.size + extra;
+    }
+
+    // 长任务看门狗：30 分钟只提醒不杀
+    function armWatchdog(conv) {
+      disarmWatchdog(conv);
+      var stop = ctx.timer.timeout(async function () {
+        watchdogs.delete(conv);
+        try {
+          var rec = await findMapping(conv);
+          if (rec && (rec.state === 'running' || rec.state === 'needs-input')) {
+            sendReply(conv, '⏱ 该任务已运行超过 30 分钟，仍在执行中。可在 DSH 看板点击任务查看会话进度（不会自动终止）。');
+            recordTurn(conv, 'timeout-notice', '');
+          }
+        } catch (e) {}
+      }, TASK_TIMEOUT_MS);
+      watchdogs.set(conv, stop);
+    }
+    function disarmWatchdog(conv) {
+      var stop = watchdogs.get(conv);
+      if (stop) { try { stop(); } catch (e) {} watchdogs.delete(conv); }
+    }
+
+    async function setTaskState(conv, patch) {
+      try {
+        await withDomain(async function (d) {
+          var t = d.table('mappings');
+          var rec = t.get(conv);
+          if (!rec) {
+            await t.put(conv, Object.assign({ sessionId: null, createdAt: Date.now(), turnCount: 0 }, patch));
+            return;
+          }
+          await t.put(conv, Object.assign({}, rec, patch));
+        });
+      } catch (e) { note('状态写入失败: ' + excerpt(e && e.message, 80)); }
+    }
+
+    async function bumpTurnCount(conv) {
+      try {
+        await withDomain(async function (d) {
+          var t = d.table('mappings');
+          var rec = t.get(conv);
+          if (rec) await t.put(conv, Object.assign({}, rec, { turnCount: Number(rec.turnCount || 0) + 1 }));
+        });
+      } catch (e) {}
+    }
+
+    function agentOptionsFromDefaultModel() {
+      var sel = ctx.agentDefaultModel.currentSelection();
+      return {
+        provider: sel.provider,
+        model: sel.model,
+        ...(sel.reasoningEffort === undefined ? {} : { reasoningEffort: sel.reasoningEffort })
+      };
+    }
+
+    ctx.effect(function () {
+      return ctx.on('session/event', function (session, event) {
+        if (!session || typeof session.id !== 'string' || session.id.indexOf('waker-') !== 0) return;
+        var entry = live.get(session.id);
+        try {
+          var type = event.type;
+          if (type === 'assistant/message') {
+            var msg = event.data && event.data.message;
+            var text = textOfContent(msg && msg.content);
+            if (entry && text) entry.lastText = text;
+          } else if (type === 'approval/asked') {
+            var d0 = event.data || {};
+            var wkrAsk = entry && entry.wakerId ? wakerCache.get(entry.wakerId) : null;
+            var askHeader = wkrAsk ? ('[' + (wkrAsk.emoji || '🤖') + ' ' + (wkrAsk.name || wkrAsk.id) + '] ') : '[Waker] ';
+            setTaskState(entry ? entry.conv : session.id, {
+              state: 'needs-input',
+              stateMsg: '等待审批: ' + excerpt(d0.toolName || '工具', 40) + (d0.reason ? ' · ' + excerpt(d0.reason, 80) : '')
+            });
+            recordTurn(entry ? entry.conv : session.id, 'needs-input', d0.toolName);
+            // 群聊提醒: 任务需要人工输入,提示发起人(精准 @ 需手机号映射,当前以昵称提示)
+            if (entry && entry.conv) {
+              var askRec = null;
+              findMapping(entry.conv).then(function (m0) {
+                var who = m0 && m0.sender ? ('@' + m0.sender + ' ') : '';
+                sendReply(entry.conv, askHeader + who + '任务需要确认: ' + excerpt(d0.toolName || '工具', 40) + (d0.reason ? ' · ' + excerpt(d0.reason, 60) : '') + '\n（请在 DSH 设置页处理审批）');
+              }).catch(function () {});
+            }
+          } else if (type === 'approval/decided') {
+            if (entry) {
+              withDomain(function (d) { return d.table('mappings').get(entry.conv); }).then(function (rec) {
+                if (rec && rec.state === 'needs-input') setTaskState(entry.conv, { state: 'running', stateMsg: null });
+              }).catch(function () {});
+            }
+          } else if (type === 'turn/end') {
+            var reason = event.data && event.data.reason ? event.data.reason : null;
+            var kind = reason ? reason.kind : null;
+            starting.delete(session.id);
+            running.delete(session.id);
+            if (entry && kind) {
+              var conv = entry.conv;
+              var wkr = entry.wakerId ? wakerCache.get(entry.wakerId) : null;
+              var header = wkr ? ('[' + (wkr.emoji || '🤖') + ' ' + (wkr.name || wkr.id) + '] ') : '[Waker] ';
+              var text;
+              var statePatch;
+              // 回执分型: 任务完成/失败走 ActionCard 无按钮卡片(实测 text 渲染子集最全:
+              // 表格/代码块可渲染,单 \n 即换行;不带跳转字段则无底部按钮);
+              // 其余短通知仍走纯文本。text 变量保留完整内容用于日志与 recordTurn。
+              var cardOpts = { format: 'actioncard', title: (wkr ? ((wkr.emoji || '🤖') + ' ' + (wkr.name || wkr.id)) : 'Waker') };
+              if (entry.lastText) {
+                text = header + '任务完成 ✅\n' + String(entry.lastText).slice(0, 1800);
+                statePatch = { state: 'done', endedAt: Date.now(), stateMsg: null };
+              } else if (kind === 'error') {
+                text = header + '任务执行出错 ❌\n' + excerpt((reason && reason.error && reason.error.message) || '未知错误', 500);
+                statePatch = { state: 'failed', endedAt: Date.now(), stateMsg: excerpt((reason && reason.error && reason.error.message) || '未知错误', 160) };
+              } else if (kind === 'aborted') {
+                text = header + '（任务已取消）';
+                statePatch = { state: 'cancelled', endedAt: Date.now(), stateMsg: null };
+              } else if (kind === 'blocked') {
+                text = header + '（任务被阻塞，无输出）';
+                statePatch = { state: 'failed', endedAt: Date.now(), stateMsg: 'turn 被阻塞' };
+              } else if (kind === 'max-tokens') {
+                text = header + '（输出达到长度上限被截断）';
+                statePatch = { state: 'failed', endedAt: Date.now(), stateMsg: '输出超长截断' };
+              } else {
+                text = header + '（任务结束: ' + kind + '，无文本输出）';
+                statePatch = { state: 'done', endedAt: Date.now(), stateMsg: null };
+              }
+              note('turn/end ' + kind + ' conv=' + excerpt(conv, 10) + ' textLen=' + String(text || '').length);
+              if (entry.lastText) {
+                sendReply(conv, String(entry.lastText).slice(0, 1800), Object.assign({}, cardOpts, { title: cardOpts.title + ' 任务完成 ✅' }));
+              } else if (kind === 'error') {
+                sendReply(conv, excerpt((reason && reason.error && reason.error.message) || '未知错误', 500), Object.assign({}, cardOpts, { title: cardOpts.title + ' 任务失败 ❌' }));
+              } else {
+                sendReply(conv, text);
+              }
+              setTaskState(conv, statePatch);
+              disarmWatchdog(conv);
+              recordTurn(conv, 'ended(' + kind + ')', text);
+              entry.lastText = null;
+              entry.pendingAsk = null;
+            }
+            pump();
+          }
+        } catch (e) { note('firehose 处理异常: ' + excerpt(e && e.message, 100)); }
+      }, { global: true });
+    }, 'waker pipeline firehose');
+
+    ctx.effect(function () {
+      return ctx.on('agent/status', function (payload) {
+        try {
+          var agent = payload && payload.agent;
+          if (!agent || !agent.session || typeof agent.session.id !== 'string') return;
+          var sid = agent.session.id;
+          if (sid.indexOf('waker-') !== 0) return;
+          var entry = live.get(sid);
+          if (payload.status === 'running') {
+            running.set(sid, entry ? entry.conv : '');
+            starting.delete(sid); // 已实际运行,不再占「启动中」名额(防双计)
+          } else {
+            running.delete(sid);
+            pump();
+          }
+        } catch (e) {}
+      }, { global: true });
+    }, 'waker status watch');
+
+    // 群内问答桥(根级抢占): ask_user_question 的应答 waterfall 是串行链,先命中的应答器若
+    // 挂起等待(GUI 客户端应答器如此)会否决整条链 —— 所以必须在根级以 prepend+global 抢占:
+    // 排到 GUI 之前,仅接管 waker 会话(其余 next() 放行 GUI)。
+    // deliver setup 里的 agentCtx.on 挂载保留作双保险(若作用域命中则同样接管,幂等:
+    // 根级 handler 查 entry.pendingAsk 已存在时 next() 让位,避免同题双应答)。
+    ctx.effect(function () {
+      return ctx.on('user-questions/request', function (request, next) {
+        try {
+          var agent = request && request.agent;
+          var sid = agent && agent.session && typeof agent.session.id === 'string' ? agent.session.id : '';
+          if (sid.indexOf('waker-') !== 0) return next();
+          var entry = live.get(sid);
+          if (!entry || !entry.conv) return next();
+          if (entry.pendingAsk) return next(); // 已有挂起应答(双保险路径),防同题双应答
+          var qs = request && Array.isArray(request.questions) ? request.questions : [];
+          if (!qs.length) return next();
+          var wkr = entry.wakerId ? wakerCache.get(entry.wakerId) : null;
+          var askHead = '[' + (wkr ? ((wkr.emoji || '🤖') + ' ' + (wkr.name || wkr.id)) : 'Waker') + '] ';
+          var lines = [];
+          for (var qi = 0; qi < qs.length; qi++) {
+            var q = qs[qi] || {};
+            lines.push('【' + String(q.header || '确认') + '】' + String(q.question || ''));
+            var opts = Array.isArray(q.options) ? q.options : [];
+            for (var oi = 0; oi < opts.length; oi++) lines.push('  ' + (oi + 1) + '. ' + String((opts[oi] && opts[oi].label) || ''));
+          }
+          findMapping(entry.conv).then(function (m0) {
+            var who = m0 && m0.sender ? ('@' + m0.sender + ' ') : '';
+            return sendReply(entry.conv, askHead + who + '任务需要你确认，回复编号或直接描述:\n' + lines.join('\n'));
+          }).catch(function () {});
+          return new Promise(function (resolve, reject) {
+            entry.pendingAsk = { questions: qs, resolve: resolve, reject: reject, askedAt: Date.now() };
+            var sig = request && request.signal;
+            if (sig && typeof sig.addEventListener === 'function') {
+              sig.addEventListener('abort', function () {
+                if (entry.pendingAsk) { entry.pendingAsk = null; reject(new Error('ask aborted')); }
+              });
+            }
+          });
+        } catch (eQ) { note('[ask-bridge] 异常: ' + excerpt(eQ && eQ.message, 120)); return next(); }
+      }, { global: true, prepend: true });
+    }, 'waker ask bridge');
+
+    // 会话窗口按天滚动的日期键(本地时区): YYYY-MM-DD
+    function todayStr() {
+      var d = new Date();
+      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+
+    async function findMapping(conv) {
+      return withDomain(function (d) { return d.table('mappings').get(conv) || null; });
+    }
+
+    async function markDeadAndStop(conv) {
+      try {
+        await withDomain(async function (d) {
+          var t = d.table('mappings');
+          var rec = t.get(conv);
+          if (!rec) return;
+          var entry = live.get(rec.sessionId);
+          if (entry) {
+            entry.pendingAsk = null;
+            live.delete(rec.sessionId);
+            starting.delete(rec.sessionId);
+            running.delete(rec.sessionId);
+            try { entry.handle.agent.cancel(new Error('新任务替代')); } catch (e) {}
+          }
+          await t.put(conv, Object.assign({}, rec, { dead: true, deadAt: Date.now() }));
+        });
+      } catch (e) {}
+    }
+
+    // plan(可选): {robotId, waker, model, binding} —— R2 @Waker 分派产物;缺省 = MVP 行为
+    async function deliver(conv, text, sender, plan) {
+      plan = plan || null;
+      var waker = plan ? plan.waker : null;
+      var presetId = waker && waker.presetId ? waker.presetId : (await ctx.agentPresets.resolve()).id;
+      // 能力治理: 配置了 capabilities 的 waker 走生成式专属预设(引用全局 skills/MCP 白名单);
+      // 专属预设不可用(生成失败/被删)时静默回退原预设,不阻塞投递
+      if (waker && waker.id && waker.capabilities) {
+        try {
+          var wkrPreset = await ctx.agentPresets.resolve('wkr-' + waker.id);
+          presetId = wkrPreset.id;
+        } catch (e) { note('[deliver] 专属预设不可用,回退 ' + presetId + ': ' + excerpt(e && e.message, 80)); }
+      }
+      var preset = null;
+      try { preset = await ctx.agentPresets.resolve(presetId); } catch (e) {
+        note('Waker preset 解析失败,回退默认: ' + String((e && e.message) || e));
+        preset = await ctx.agentPresets.resolve();
+        presetId = preset.id;
+      }
+      var mapping = await findMapping(conv);
+      // 跨天窗口滚动(队列/直接投递两条路径都经这里): 旧窗停用但不杀在跑会话
+      if (mapping && mapping.sessionId && mapping.sessionDate !== todayStr()) {
+        try {
+          await withDomain(async function (d) {
+            var t = d.table('mappings');
+            var rec = t.get(conv);
+            if (rec) await t.put(conv, Object.assign({}, rec, { dead: true, deadAt: Date.now(), deadReason: 'day-window' }));
+          });
+        } catch (e) {}
+        mapping = null;
+      }
+      if (mapping && mapping.sessionId) {
+        var existing = live.get(mapping.sessionId);
+        if (!existing) {
+          try {
+            await withDomain(async function (d) {
+              d.table('mappings').put(conv, Object.assign({}, mapping, { dead: true, deadAt: Date.now() }));
+            });
+          } catch (e) {}
+          mapping = null;
+        } else if (mapping.dead) {
+          mapping = null;
+        }
+      } else {
+        mapping = null;
+      }
+      if (mapping && mapping.sessionId && !mapping.dead) {
+        var e1 = live.get(mapping.sessionId);
+        e1.handle.agent.followup({
+          id: rid(),
+          role: 'user',
+          content: [{ type: 'text', text: text }],
+          source: { kind: 'plugin', plugin: 'dsh-waker', form: 'notice', summary: excerpt(sender + ': ' + text, 80) }
+        });
+        recordTurn(conv, 'followup', text);
+        bumpTurnCount(conv);
+        return { sessionId: String(mapping.sessionId), created: false };
+      }
+      // 会话工作目录与项目权限: 每个 Waker 以其命名的子目录(<base>/<Waker 名>)为工作区,
+      // 并自动在 workspaceRegistry 创建同名工作区分组(取消「未分组」散落)。
+      // base 优先用户 config.cwd, 否则 ~/.dsh/waker-workspace。
+      // 项目权限硬约束: 若任务目标命中该 Waker 已授权项目(显式点名或单就绪项目),
+      // 会话根直接落在该项目目录 → 沙箱唯一可写根 = 该项目;否则落在工作区(项目只读)。
+      var workplace = await wakerWorkplace(waker || null);
+      var projRoot = await pickProjectRoot(waker, text);
+      var cwd = projRoot ? projRoot.dir : workplace.cwd;
+      var modelSel = (plan && plan.model && plan.model.provider && plan.model.model)
+        ? { provider: plan.model.provider, model: plan.model.model, ...(plan.model.reasoningEffort === undefined ? {} : { reasoningEffort: plan.model.reasoningEffort }) }
+        : agentOptionsFromDefaultModel();
+      var wakerExtra = waker && waker.systemExtra ? String(waker.systemExtra).slice(0, 4000) : '';
+      var sessionId = 'waker-conv-' + rid();
+      // entry 预创建: setup 闭包(提问应答器)先于 live.set 运行,需要引用同一对象
+      var entry = { handle: null, conv: conv, lastText: null, wakerId: waker ? waker.id : null, pendingAsk: null };
+      var handle = await ctx.agents.create({
+        sessionId: sessionId,
+        meta: { cwd: cwd, agentPreset: presetId },
+        agentOptions: modelSel,
+        setup: async function (agentCtx) {
+          await ctx.agentPresets.mount(agentCtx, presetId);
+          // 绑定模型强制: agent/request waterfall 把每次请求改写为绑定的「任务执行模型」
+          // (dsh-webhook 同款官方模式),任务会话不再跟随全局默认模型 — 全局默认缺凭据
+          // (如 volcengine 未配 key)时任务不会连带失败。绑定为「跟随全局」时不挂。
+          if (modelSel && modelSel.provider && modelSel.model && plan && plan.model && plan.model.provider) {
+            try {
+              agentCtx.on('agent/request', async function (_payload, next) {
+                var resolved = await next();
+                if (resolved.provider === modelSel.provider && resolved.model === modelSel.model) return resolved;
+                return {
+                  provider: modelSel.provider,
+                  model: modelSel.model,
+                  ...(modelSel.reasoningEffort === undefined ? {} : { reasoningEffort: modelSel.reasoningEffort })
+                };
+              });
+            } catch (eWf) { note('[deliver] 绑定模型 waterfall 挂载失败: ' + excerpt(eWf && eWf.message, 120)); }
+          }
+          // MCP 工具白名单(会话级 restrict,仅作用于 global 层 mcp__* 工具;
+          // 白名单与现存工具名求交,全局卸载/server 掉线的失效引用自动跳过)
+          if (waker && waker.capabilities && (waker.capabilities.mcpServers !== null || waker.capabilities.mcpTools !== null)) {
+            try {
+              var toolsSvc = agentCtx.get ? agentCtx.get('tools') : null;
+              if (toolsSvc && typeof toolsSvc.restrict === 'function' && typeof toolsSvc.schemas === 'function') {
+                agentCtx.effect(function () {
+                  try {
+                    var globalNames = (toolsSvc.schemas() || []).map(function (s) { return String(s.name || ''); })
+                      .filter(function (n) { return n.indexOf('mcp__') === 0; });
+                    var capsM = waker.capabilities;
+                    var allow = [];
+                    for (var gi = 0; gi < globalNames.length; gi++) {
+                      var gn = globalNames[gi];
+                      var pm = parseMcpToolName(gn);
+                      var server = pm ? pm.server : '';
+                      var okServer = !capsM.mcpServers || capsM.mcpServers.indexOf(server) !== -1;
+                      var okTool = !capsM.mcpTools || capsM.mcpTools.indexOf(gn) !== -1;
+                      if (okServer && okTool) allow.push(gn);
+                    }
+                    if (!allow.length && globalNames.length) return toolsSvc.restrict({ deny: globalNames });
+                    if (allow.length && allow.length < globalNames.length) return toolsSvc.restrict({ allow: allow });
+                    return function () {}; // 全量放行
+                  } catch (eRs) { note('[deliver] MCP restrict 失败,全量放行: ' + excerpt(eRs && eRs.message, 100)); return function () {}; }
+                }, 'waker mcp filter');
+              }
+            } catch (eT) { note('[deliver] MCP 过滤挂载异常: ' + excerpt(eT && eT.message, 100)); }
+          }
+          if (wakerExtra && agentCtx.systemPrompt && typeof agentCtx.systemPrompt.section === 'function') {
+            agentCtx.systemPrompt.section({
+              name: 'waker:' + (waker.id || 'custom'),
+              order: 30,
+              text: wakerExtra
+            });
+          }
+          // 项目权限告知段: 授权清单 + 当前会话根 + 纪律(询问权限时如实回答的依据)
+          if (agentCtx.systemPrompt && typeof agentCtx.systemPrompt.section === 'function') {
+            var readyAll = [];
+            try {
+              var allRows = await listProjects();
+              var visRows = projectsVisibleTo(allRows, waker ? waker.id : null);
+              var fsSvc = ctx.get ? ctx.get('fs') : null;
+              for (var vi = 0; vi < visRows.length; vi++) {
+                var vd = projectDir(visRows[vi]);
+                if (!vd) continue;
+                vd = String(vd).replace(/\/+$/, '');
+                var vok = true;
+                if (fsSvc && typeof fsSvc.resolve === 'function') {
+                  try {
+                    var vt = await fsSvc.resolve(vd);
+                    var vf = vt ? await fsSvc.stat(vt) : null;
+                    vok = !!vf && vf.type === 'directory';
+                  } catch (e2) { vok = false; }
+                }
+                if (vok) readyAll.push({ project: visRows[vi], dir: vd });
+              }
+            } catch (e3) {}
+            agentCtx.systemPrompt.section({
+              name: 'waker:projects',
+              order: 31,
+              text: projectSectionText(waker, readyAll, projRoot, cwd)
+            });
+            // 输出格式约束: 回执走钉钉 ActionCard(无按钮),text 支持完整 markdown 含表格/代码块,
+            // 提示 AI 可按内容需要使用,保持渲染质量
+            agentCtx.systemPrompt.section({
+              name: 'waker:output',
+              order: 32,
+              text: '【回复格式约束】你的输出会通过钉钉 ActionCard 卡片回复给用户,支持完整 markdown:标题、加粗、斜体、有序/无序列表、引用、链接、表格、代码块均可正常渲染,请按内容需要使用;输出为纯结论性文本时可不用表格。'
+            });
+            // 提问纪律: 群聊无人值守场景默认自主决策;ask_user_question 会转达钉钉群等待回复,
+            // 每问一次都是一次往返成本,仅方向性缺失时才用
+            agentCtx.systemPrompt.section({
+              name: 'waker:ask-discipline',
+              order: 33,
+              text: '【提问纪律】你是钉钉群里的无人值守助手,默认自主决策:信息不全时基于上下文做最合理假设并继续执行,在回执中说明所做假设。仅当缺失的信息会导致方向性错误(做错比多问代价更大)时才调用 ask_user_question,且一次只问一个问题、给 2-4 个可选项。你的提问会转达给群里的用户,用户的群回复会作为该工具的结果返回给你。'
+            });
+            // 群内问答桥已在插件根级统一接管(user-questions/request waterfall 是串行链,
+            // GUI 应答器挂起会否决后续;根级 prepend+global 抢先),此处不再重复挂载。
+          }
+        }
+      });
+      // 沙箱钉死: 追加会话 sandbox/mode 事件(官方写入路径,fold 取最后一个事件)。
+      // 无论部署默认是什么,Waker 会话一律 workspace-write → 写入被强制限制在 cwd 内。
+      try {
+        var sess = handle && handle.agent ? handle.agent.session : null;
+        if (sess && typeof sess.append === 'function') {
+          sess.append('sandbox/mode', { mode: 'workspace-write' });
+          // 无人值守: 升级请求(如越权写入的沙箱提权)直接拒绝而非挂起等待审批,
+          // 会话立即收到确定结果并转达用户;权限边界因此不可被静默扩宽。
+          sess.append('approval/policy', { policy: 'never' });
+        }
+      } catch (e) { note('[deliver] sandbox/mode 追加失败: ' + String((e && e.message) || e)); }
+      if (projRoot) note('[deliver] 项目权限: 会话根=项目 ' + (projRoot.project.name || projRoot.project.id) + ' ' + projRoot.dir);
+      entry.handle = handle;
+      live.set(sessionId, entry);
+      try {
+        // 会话窗口挂接工作区(平台约束: attachSession 校验 realpath(会话 cwd) === 工作区路径,
+        // 所以挂接目标必须与 cwd 同一真实目录):
+        // - 项目任务: 项目路径 realpath 化后自动注册同名工作区组(如 moment)并挂入 ——
+        //   项目会话在侧栏归项目组,一眼可查;项目目录即会话 cwd,校验天然通过
+        // - 非项目任务: 挂 Waker 工作区(cwd=waker 执行目录,同上)
+        // 此前两处缺陷: 项目会话被回退挂 Waker 组(cwd 不同必抛错,静默吞掉 → 窗口消失),
+        // 且未 realpath 化导致大小写别名路径注册/校验不一致。
+        var ws = null;
+        if (projRoot) ws = await ensureWakerWorkspace(projRoot.dir, String((projRoot.project && (projRoot.project.name || projRoot.project.id)) || 'Waker 项目'));
+        if (!ws) ws = workplace.workspace || await ensureWakerWorkspace(cwd, 'Waker 任务');
+        if (ws) {
+          // attachSession 可能挂起(阻塞后续 mapping.put),限时 5s 防御
+          var attachOk = await Promise.race([
+            ws.attachSession(sessionId),
+            new Promise(function (res) { ctx.timer.setTimeout(function () { res(false); }, 5000); })
+          ]);
+          if (attachOk === false) note('attachSession 超时(5s),继续');
+        }
+      } catch (e) { note('attachSession 失败: ' + String((e && e.message) || e)); }
+      try {
+        // 会话窗口命名: [Waker][emoji Waker名] MMDD 首条任务摘要 —— 日期是窗口的组织维度,
+        // 同日同群同 Waker 一个窗口;同日强制新开(新任务: 前缀)的窗口靠摘要区分
+        var d0 = new Date();
+        var mmdd = String(d0.getMonth() + 1).padStart(2, '0') + String(d0.getDate()).padStart(2, '0');
+        ctx.sessionTitle.rename(handle.agent.session, '[Waker]' + (waker ? '[' + (waker.emoji || '🤖') + ' ' + (waker.name || waker.id) + ']' : '') + ' ' + mmdd + ' ' + excerpt(text, 16));
+      } catch (e) {}
+      await withDomain(async function (d) {
+        d.table('mappings').put(conv, { sessionId: sessionId, sessionDate: todayStr(), createdAt: Date.now(), turnCount: 0, state: 'running', startedAt: Date.now(), lastUserText: String(text || '').slice(0, 2000), sender: excerpt(sender, 40), robotId: plan ? plan.robotId || null : null, wakerId: waker ? waker.id : null, projectId: projRoot ? projRoot.project.id : null, projectRoot: projRoot ? projRoot.dir : null });
+      });
+      handle.agent.followup({
+        id: rid(),
+        role: 'user',
+        content: [{ type: 'text', text: text }],
+        source: { kind: 'plugin', plugin: 'dsh-waker', form: 'notice', summary: excerpt(sender + ': ' + text, 80) }
+      });
+      recordTurn(conv, 'created', text);
+      return { sessionId: sessionId, created: true };
+    }
+
+    async function pump() {
+      if (pumping) return;
+      pumping = true;
+      try {
+        while (queueMem.length) {
+          var cfg = await readConfig();
+          if (activeCount() >= cfg.concurrencyCap) break;
+          var item = queueMem.shift();
+          try {
+            await withDomain(async function (d) { await d.table('queue').delete(String(item.seq)); });
+          } catch (e) {}
+          try {
+            if (item.forcedNew) await markDeadAndStop(item.conv);
+            var r = await deliver(item.conv, item.text, item.sender || '钉钉用户', item.plan);
+            starting.add(r.sessionId);
+            await setTaskState(item.conv, { state: 'running', startedAt: Date.now(), stateMsg: null });
+            armWatchdog(item.conv);
+            sendReply(item.conv, '任务开始执行 ✅');
+            recordTurn(item.conv, 'started', item.text);
+          } catch (e) {
+            await setTaskState(item.conv, { state: 'failed', endedAt: Date.now(), stateMsg: excerpt(e && e.message, 160) });
+            sendReply(item.conv, '任务启动失败: ' + excerpt(e && e.message, 300));
+            recordTurn(item.conv, 'start-failed', e && e.message);
+          }
+        }
+      } finally {
+        pumping = false;
+      }
+    }
+
+    // 群回复 → ask_user_question 答案: 编号/选项名精确匹配 → selected;其余 → custom 文本
+    function buildAskAnswer(questions, reply) {
+      var t = String(reply || '').trim();
+      var answers = [];
+      for (var i = 0; i < questions.length; i++) {
+        var q = questions[i] || {};
+        var opts = Array.isArray(q.options) ? q.options : [];
+        var picked = null;
+        var m1 = t.match(/^([0-9]+)(?:\s*[、.。,，]\s*|\s+)(.*)$/);
+        var m2 = /^([0-9]+)$/.exec(t);
+        var num = m1 ? parseInt(m1[1], 10) : (m2 ? parseInt(m2[1], 10) : 0);
+        if (num >= 1 && num <= opts.length) picked = [String(opts[num - 1].label)];
+        if (!picked) {
+          for (var oi = 0; oi < opts.length; oi++) {
+            if (String(opts[oi].label).trim() === t) { picked = [String(opts[oi].label)]; break; }
+          }
+        }
+        answers.push(picked
+          ? { id: String(q.id || ('q' + i)), selected: picked }
+          : { id: String(q.id || ('q' + i)), selected: [], custom: t });
+      }
+      return { answers: answers };
+    }
+
+    async function handleIncoming(conv, text, sender, plan) {
+      plan = plan || null;
+      var forcedNew = QUEUE_PREFIX.test(text);
+      var cleanText = forcedNew ? text.replace(QUEUE_PREFIX, '') : text;
+      // R2 前缀路由已废弃(用户决议 AI 匹配);此处仅保留 forcedNew 语义透传
+      if (plan && plan.waker && forcedNew) cleanText = cleanText;
+      var mapping = await findMapping(conv);
+      var liveEntry = mapping && mapping.sessionId ? live.get(mapping.sessionId) : null;
+      // 挂起中的 ask_user_question: 群回复优先作为答案回注(跨天也算,应答先于窗口滚动)
+      if (!forcedNew && liveEntry && liveEntry.pendingAsk) {
+        var pa = liveEntry.pendingAsk;
+        liveEntry.pendingAsk = null;
+        try { pa.resolve(buildAskAnswer(pa.questions, cleanText)); } catch (ePa) {}
+        await setTaskState(conv, { state: 'running', lastUserText: String(cleanText).slice(0, 2000), sender: excerpt(sender, 40) });
+        recordTurn(conv, 'ask-answer', cleanText);
+        return;
+      }
+      // 会话窗口按天滚动: 跨天消息不续旧窗(旧记录标记停用);旧会话在跑的任务
+      // 自然跑完并照常回执(不强杀),新消息落当日新窗。旧记录无 sessionDate
+      // (历史永久窗)同样滚动,从升级时刻起干净切窗。
+      if (mapping && mapping.sessionId && mapping.sessionDate !== todayStr()) {
+        try {
+          await withDomain(async function (d) {
+            var t = d.table('mappings');
+            var rec = t.get(conv);
+            if (rec) await t.put(conv, Object.assign({}, rec, { dead: true, deadAt: Date.now(), deadReason: 'day-window' }));
+          });
+        } catch (e) {}
+        mapping.dead = true;
+      }
+      if (!forcedNew && liveEntry && !mapping.dead) {
+        liveEntry.handle.agent.followup({
+          id: rid(),
+          role: 'user',
+          content: [{ type: 'text', text: cleanText }],
+          source: { kind: 'plugin', plugin: 'dsh-waker', form: 'notice', summary: excerpt(sender + ': ' + cleanText, 80) }
+        });
+        await setTaskState(conv, { state: 'running', lastUserText: String(cleanText).slice(0, 2000), sender: excerpt(sender, 40) });
+        armWatchdog(conv);
+        recordTurn(conv, 'followup', cleanText);
+        bumpTurnCount(conv);
+        return;
+      }
+      var cfg = await readConfig();
+      if (activeCount() < cfg.concurrencyCap) {
+        if (forcedNew) await markDeadAndStop(conv);
+        var r = await deliver(conv, cleanText, sender, plan);
+        starting.add(r.sessionId);
+        armWatchdog(conv);
+        // 过程通知只给任务类(长任务需要中间反馈);问答类(question)答案几秒后即达,通知是噪音
+        if (!plan || plan.judgeVerdict !== 'question') sendReply(conv, '已创建任务，正在执行…');
+        recordTurn(conv, 'created', cleanText);
+      } else {
+        var seq = ++seqCounter;
+        var item = { seq: seq, conv: conv, text: cleanText, sender: excerpt(sender, 40), enqueuedAt: Date.now(), forcedNew: forcedNew, plan: plan };
+        queueMem.push(item);
+        await withDomain(async function (d) { await d.table('queue').put(String(seq), item); });
+        await setTaskState(conv, { state: 'queued', queuedAt: Date.now(), lastUserText: String(cleanText).slice(0, 2000), sender: excerpt(sender, 40) });
+        sendReply(conv, '任务已排队（第 ' + queueMem.length + ' 位，当前 ' + activeCount() + ' 个任务运行中）');
+        recordTurn(conv, 'queued', cleanText);
+      }
+    }
+
+    function handleLine(line) {
+      var ev;
+      try { ev = JSON.parse(line); } catch (e) { return; }
+      if (!ev || typeof ev !== 'object') return;
+      if (ev.type === 'ready') {
+        state.pid = ev.pid || null;
+        state.httpPort = ev.httpPort || null;
+        state.phase = 'running';
+        pushConfig(false).catch(function () {});
+      } else if (ev.type === 'status') {
+        // v4: status 带 robots 分桶;兼容 v1 顶层字段
+        state.bridgeStatus = {
+          phase: ev.phase || null,
+          robots: ev.robots || null,
+          endpoint: ev.endpoint || null,
+          reconnectAttempts: ev.reconnectAttempts || 0,
+          lastError: ev.lastError || null
+        };
+      } else if (ev.type === 'log') {
+        note(String(ev.msg || ''));
+      } else if (ev.type === 'event' && ev.kind === 'bot-message') {
+        state.eventsSeen += 1;
+        state.lastEventAt = ev.receivedAt || Date.now();
+        var rid0 = ev.robotId || 'robot-default';
+        var rbEv = state.evByRobot[rid0] || (state.evByRobot[rid0] = { seen: 0, lastAt: null, recent: [] });
+        rbEv.seen += 1;
+        rbEv.lastAt = state.lastEventAt;
+        var data = (ev && ev.data && typeof ev.data === 'object') ? ev.data : {};
+        var text = data.text && data.text.content ? data.text.content : '';
+        var sender = data.senderNick || data.senderStaffId || '钉钉用户';
+        var conv = data.conversationId || '';
+        state.recentEvents.push({
+          t: state.lastEventAt,
+          conv: excerpt(conv, 24),
+          sender: excerpt(sender, 20),
+          text: excerpt(text, 60)
+        });
+        if (state.recentEvents.length > 5) state.recentEvents.splice(0, state.recentEvents.length - 5);
+        rbEv.recent.push({ t: state.lastEventAt, conv: excerpt(conv, 24), sender: excerpt(sender, 20), text: excerpt(text, 60) });
+        if (rbEv.recent.length > 5) rbEv.recent.splice(0, rbEv.recent.length - 5);
+        // ---- R2 M3: @过滤(群聊未@ → 完全静默,仅 telemetry) ----
+        if (!atAllows(data)) {
+          telemetry.atFiltered++;
+          return;
+        }
+        if (conv && text) {
+          // 即时确认: @机器人立即秒回「收到了」,让用户知道「已看到」。
+          // 钉钉未开放机器人消息表态 Reaction API(新旧网关 7 个候选端点 2026-09 探测均 404),
+          // 极短文本秒回是最接近表态的形态;任务流转本身仍有「一次提问一次回复」的过程通知分型。
+          sendReply(conv, '收到了');
+          // 管道 v2: resolveRoute → 判定(forcedNew 跳过) → 上下文注入 → handleIncoming
+          (async function () {
+            var plan = null;
+            try { plan = await resolveRoute(ev.robotId || 'robot-default', conv, text); } catch (e) { plan = null; note('[route] 异常: ' + excerpt(e && e.message, 120)); }
+            var forcedNew = QUEUE_PREFIX.test(text);
+            var judgeModeOn = true;
+            if (plan) {
+              try { var cfg0 = await readConfig(); judgeModeOn = cfg0.judgeMode !== 'off' && (!plan.binding || plan.binding.judgeMode !== 'off'); } catch (e) {}
+              if (judgeModeOn && !forcedNew) {
+                var j = await judgeIsTask(text, plan.judgeModel);
+                if (plan) plan.judgeVerdict = j.verdict || null; // 供投递时区分询问/任务的过程通知策略
+                if (!j.isTask) {
+                  // 判定为讨论 → 不建任务,但给委婉引导让用户明确需求(同会话 3 分钟节流防闲聊刷屏)
+                  telemetry.judgeSilent++;
+                  contextRecord(conv, 'user', text); // 讨论内容仍进上下文窗
+                  var nowJ = Date.now();
+                  var lastJ = judgeNudgeAt.get(conv) || 0;
+                  if (nowJ - lastJ > 180000) {
+                    judgeNudgeAt.delete(conv);
+                    judgeNudgeAt.set(conv, nowJ);
+                    if (judgeNudgeAt.size > 200) judgeNudgeAt.delete(judgeNudgeAt.keys().next().value);
+                    sendReply(conv, '这条消息我没有看出需要处理的具体事项，就先不创建任务啦。想让我帮忙的话，把要做的事说清楚即可（例如"帮我修复登录页报错"），也可以用「新任务：」开头强制创建。');
+                  }
+                  return;
+                }
+              }
+              // AI 匹配: 凡将投递的任务,池内候选 >1 时用大模型选最合适的 Waker(原关键词意图路由已废弃)
+              var aiWaker = await chooseWakerForText(text, plan);
+              if (aiWaker) plan.waker = aiWaker;
+            }
+            // 活跃会话的 followup 不注入上下文(已有会话记忆);新建任务才拼上下文
+            var mapping0 = await findMapping(conv);
+            var liveEntry0 = mapping0 && mapping0.sessionId ? live.get(mapping0.sessionId) : null;
+            var isNewTask = !(mapping0 && mapping0.sessionId && liveEntry0 && !mapping0.dead);
+            if (forcedNew) text = text.replace(QUEUE_PREFIX, '');
+            // 先按原文进上下文窗(避免把拼接段递归存回)
+            contextRecord(conv, 'user', text);
+            if (isNewTask && !forcedNew) {
+              // 上下文注入:新建会话时把近期群聊文本段并入首条消息
+              var cfg1 = await readConfig();
+              var ctxText = buildContextText(conv, cfg1);
+              if (ctxText) text = ctxText + '【本次消息】' + text;
+            }
+            await handleIncoming(conv, text, sender, plan || null);
+          })().catch(function (e) {
+            note('投递失败: ' + String((e && e.message) || e));
+            sendReply(conv, '任务投递失败: ' + String((e && e.message) || e));
+          });
+        }
+      }
+    }
+
+    // ---- R2: 路由解析(@过滤/范围过滤 → 绑定 → 池首兜底 + AI 匹配选人;模型解析) ----
+    // ---- R2 M3: @过滤 / 判定 / 上下文窗 ----
+    // telemetry: 未进管道事件的静默计数(不回复、不记录、不建会话)
+    var telemetry = { atFiltered: 0, judgeSilent: 0, judgeErrors: 0, judgeCalls: 0 };
+    // judgeNudgeAt: conv -> 上次「非任务引导」回复时间(LRU 200),3 分钟内同会话只引导一次
+    var judgeNudgeAt = new Map();
+    // wakerCache: turn/end / approval 回执同步取 emoji/name
+    var wakerCache = new Map();
+    function atAllows(data) {
+      // 单聊恒通过;群聊需 isAtAll 或 atUsers 非空(字段形状以真实链路校准,diag 已补记)
+      var convType = data.conversationType === 2 || data.conversationType === '2' ? '2' : '1';
+      if (convType === '1') return true;
+      if (data.isAtAll === true) return true;
+      if (Array.isArray(data.atUsers) && data.atUsers.length > 0) return true;
+      // 兼容:部分链路把 @ 放 inAtList / atDingtalkIds
+      if (Array.isArray(data.inAtList) && data.inAtList.length > 0) return true;
+      if (Array.isArray(data.atDingtalkIds) && data.atDingtalkIds.length > 0) return true;
+      return false;
+    }
+
+    // contextStore: conv -> 环形最近 40 条 {t, role, text};LRU 200 conv;不持久化
+    var contextStore = new Map();
+    function contextRecord(conv, role, text) {
+      var ring = contextStore.get(conv);
+      if (!ring) {
+        if (contextStore.size >= 200) {
+          var firstKey = contextStore.keys().next().value;
+          contextStore.delete(firstKey);
+        }
+        ring = [];
+        contextStore.set(conv, ring);
+      }
+      // LRU touch
+      contextStore.delete(conv);
+      contextStore.set(conv, ring);
+      ring.push({ t: Date.now(), role: role, text: String(text || '').slice(0, 500) });
+      if (ring.length > 40) ring.splice(0, ring.length - 40);
+    }
+    function buildContextText(conv, cfg) {
+      var ring = contextStore.get(conv);
+      if (!ring || !ring.length) return '';
+      var maxMsgs = (cfg && cfg.contextWindow && cfg.contextWindow.maxMessages) || 10;
+      var maxAge = ((cfg && cfg.contextWindow && cfg.contextWindow.maxAgeHours) || 24) * 3600 * 1000;
+      var cutoff = Date.now() - maxAge;
+      var picked = ring.filter(function (m) { return m.t >= cutoff; }).slice(-maxMsgs);
+      if (!picked.length) return '';
+      var lines = picked.map(function (m) { return (m.role === 'user' ? '用户' : 'Waker') + ': ' + m.text; });
+      return '【近期群聊上下文,供理解本次消息】\n' + lines.join('\n') + '\n【上下文结束】\n\n';
+    }
+
+    // judgeService: llm.stream 一次调用,8s deadline,fail-open(异常/超时=任务)
+    var JUDGE_TIMEOUT_MS = 8000;
+    var JUDGE_SYSTEM = '你是研发协作群的消息分类器,回答两行、不要其他内容。\n第一行:这条消息属于哪类?\n- 任务:需要动手做事情(实现、修改、排查、审查、写文档、部署、命令执行等)\n- 询问:直接问问题、要答案或信息(如"你是谁""现在几点""怎么用"),期望立刻回答\n- 讨论:观点交流、闲聊、寒暄、征求意见\n- 无关:广告、无意义内容\n只回答一个词:任务 或 询问 或 讨论 或 无关。\n第二行:若是任务,给一个职能意图词(如 实现/修复/测试/审查/文档/部署/其他);若是询问或讨论,回答 无。';
+    async function judgeIsTask(text, assistModel) {
+      telemetry.judgeCalls++;
+      var llm = ctx.get ? ctx.get('llm') : null;
+      if (!llm || typeof llm.stream !== 'function') return { isTask: true, reason: 'no-llm' };
+      // 路由兜底: 绑定 assistModel → 全局 assistModel → 全局默认模型(llm.stream 必须显式 provider/model)
+      var route = assistModel && assistModel.provider ? assistModel : null;
+      if (!route) {
+        try {
+          var cfgJ = await readConfig();
+          if (cfgJ.assistModel && cfgJ.assistModel.provider) route = cfgJ.assistModel;
+        } catch (e) {}
+      }
+      if (!route) {
+        try {
+          var sel = ctx.agentDefaultModel.currentSelection();
+          if (sel && sel.provider) route = { provider: sel.provider, model: sel.model };
+        } catch (e) {}
+      }
+      if (!route) return { isTask: true, reason: 'no-route' };
+      var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      // timer.setTimeout 返回 disposer(函数),调用即 clearTimeout
+      var cancelTimer = ctx.timer && ctx.timer.setTimeout ? ctx.timer.setTimeout(function () { if (controller) controller.abort(); }, JUDGE_TIMEOUT_MS) : null;
+      try {
+        var messages = [null];
+        var userMsg = {
+          id: 'judge-' + Date.now(),
+          role: 'user',
+          content: [{ type: 'text', text: String(text || '').slice(0, 1500) }],
+          source: { kind: 'plugin', plugin: 'dsh-waker' }
+        };
+        var options = {
+          provider: route.provider,
+          model: route.model,
+          messages: [userMsg],
+          system: JUDGE_SYSTEM,
+          maxTokens: 200,
+          purpose: 'waker-judge',
+          signal: controller ? controller.signal : undefined
+        };
+        var textOut = '';
+        for await (var chunk of llm.stream(options)) {
+          if (chunk && chunk.type === 'text-delta' && chunk.text) textOut += chunk.text;
+          if (chunk && chunk.type === 'finish' && chunk.reason && chunk.reason.kind === 'error') {
+            telemetry.judgeErrors++;
+            note('[judge] stream error: ' + JSON.stringify(chunk.reason.failure || {}).slice(0, 160));
+            return { isTask: true, reason: 'stream-error' };
+          }
+        }
+        var firstLine = String(textOut).split('\n')[0] || '';
+        var v = firstLine.indexOf('讨论') !== -1 || firstLine.indexOf('无关') !== -1 ? 'discussion' : (firstLine.indexOf('询') !== -1 || firstLine.indexOf('问') !== -1 ? 'question' : 'task');
+        var intent = '';
+        var lines = String(textOut).split('\n');
+        if (lines.length > 1) {
+          intent = String(lines[1] || '').trim().slice(0, 12);
+          if (intent === '无' || intent === '无。') intent = '';
+        }
+        note('[judge] ' + v + (intent ? '/' + intent : '') + ' · 原文: ' + excerpt(String(textOut).replace(/\s+/g, ' '), 80) + ' · 输入: ' + excerpt(String(text).replace(/\s+/g, ' '), 60));
+        return { isTask: v !== 'discussion', verdict: v, intent: intent, raw: textOut.slice(0, 60) };
+      } catch (e) {
+        telemetry.judgeErrors++;
+        note('[judge] fail-open: ' + String((e && e.message) || e).slice(0, 160));
+        return { isTask: true, reason: 'fail-open:' + String((e && e.message) || e).slice(0, 60) };
+      } finally {
+        if (cancelTimer) { try { cancelTimer(); } catch (e) {} }
+      }
+    }
+
+    // AI 匹配: 任务已判定后,在池内候选(>1)间选当下最合适的 Waker
+    // llm.stream 一次调用,6s deadline,失败/超时 → 池首兜底;单候选不调用直接返回
+    var CHOOSE_TIMEOUT_MS = 6000;
+    async function chooseWakerForText(text, plan) {
+      if (!plan || !plan.wakerPool || plan.wakerPool.length < 2) return null;
+      var wakerId = plan.waker.id; // 当前为池首成员,若候选不包含则保持
+      var llm = ctx.get ? ctx.get('llm') : null;
+      var route = (plan.judgeModel && plan.judgeModel.provider) ? plan.judgeModel : null;
+      if (!route) {
+        try {
+          var cfgC = await readConfig();
+          if (cfgC.assistModel && cfgC.assistModel.provider) route = cfgC.assistModel;
+        } catch (e) {}
+      }
+      if (!route) {
+        try {
+          var selC = ctx.agentDefaultModel.currentSelection();
+          if (selC && selC.provider) route = { provider: selC.provider, model: selC.model };
+        } catch (e) {}
+      }
+      if (!llm || typeof llm.stream !== 'function' || !route) return null;
+      // 候选清单(禁用者已在 resolveRoute 过滤;逐条 resolve,避免越权候选)
+      // 候选附各自已授权项目名: 任务点名项目时,模型优先选拥有该项目的 Waker
+      var roster = [];
+      var projByWaker = {};
+      try {
+        var projRows = await listProjects();
+        for (var pi2 = 0; pi2 < plan.wakerPool.length; pi2++) {
+          var pv = projectsVisibleTo(projRows, plan.wakerPool[pi2]).map(function (pp) { return pp.name; }).filter(Boolean);
+          projByWaker[plan.wakerPool[pi2]] = pv;
+        }
+      } catch (e) {}
+      for (var ri = 0; ri < plan.wakerPool.length; ri++) {
+        var rw = await getWaker(plan.wakerPool[ri]);
+        if (!rw) continue;
+        var rp = projByWaker[rw.id] || [];
+        roster.push(rw.id + ':' + (rw.name || rw.id) + '(' + (rw.role || '') + (rp.length ? ';项目:' + rp.join(',') : '') + ')');
+      }
+      if (roster.length < 2) return null;
+      var rosterTxt = roster.join('; ');
+      var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      var cancelTimer = ctx.timer && ctx.timer.setTimeout ? ctx.timer.setTimeout(function () { if (controller) controller.abort(); }, CHOOSE_TIMEOUT_MS) : null;
+      try {
+        var messages = [null];
+        var userMsg = {
+          id: 'choose-' + Date.now(),
+          role: 'user',
+          content: [{ type: 'text', text: String(text || '').slice(0, 1500) }],
+          source: { kind: 'plugin', plugin: 'dsh-waker' }
+        };
+        var options = {
+          provider: route.provider,
+          model: route.model,
+          messages: [userMsg],
+          system: '你是研发协作消息的 Waker 调度器。根据任务内容从候选中选择最合适的一位 Waker。候选格式为 id:名称(职责;项目:该 Waker 有权限的项目)。若任务明确提到某个项目,优先选择拥有该项目的候选。只输出你选中的那一个 id 本身,不要输出其他任何内容、不要解释。候选:\n' + rosterTxt,
+          maxTokens: 600,
+          purpose: 'waker-choose',
+          signal: controller ? controller.signal : undefined
+        };
+        var textOut = '';
+        var diag = [];
+        var maxDelta = 0;
+        for await (var chunk of llm.stream(options)) {
+          if (chunk && chunk.type === 'text-delta' && chunk.text) { textOut += chunk.text; if (chunk.text.length > maxDelta) maxDelta = chunk.text.length; }
+          else if (chunk && chunk.type) {
+            diag.push(chunk.type + (chunk.reason ? (':' + (chunk.reason.kind || '')) : '') + (chunk.error ? ':err' : ''));
+            if (diag.length > 40) diag.shift();
+          }
+        }
+        var rawTxt = String(textOut || '').trim();
+        if (!rawTxt) note('[choose] 空输出 模型 ' + (route.model || route.provider) + ' 流尾=' + (diag.join(',') || '(无)') + ' 最大delta=' + maxDelta);
+        if (!rawTxt) return null;
+        // [diag] 日志仅在未命中时保留,避免刷屏
+        // 容错解析: 输出含任一候选 id → 采用;否则清洗整串(去标点/编号)后精确匹配
+        var pick = '';
+        var canIds = plan.wakerPool.slice();
+        for (var ci = 0; ci < canIds.length; ci++) {
+          if (rawTxt.indexOf(canIds[ci]) !== -1) { pick = canIds[ci]; break; }
+        }
+        if (!pick) {
+          var cleaned = rawTxt.replace(/[^A-Za-z0-9_:-]/g, '').replace(/^[0-9]*:?/, '');
+          if (canIds.indexOf(cleaned) !== -1) pick = cleaned;
+        }
+        if (pick && pick !== wakerId) {
+          var pickedW = await getWaker(pick);
+          if (pickedW && pickedW.enabled !== false) {
+            note('[choose] ' + excerpt(String(text).replace(/\s+/g, ' '), 60) + ' → ' + pick);
+            return pickedW;
+          }
+        }
+        if (pick === wakerId) return null; // 模型选中兜底本身:静默,无需记日志
+        note('[choose] 未命中候选(原文 ' + excerpt(rawTxt.replace(/\s+/g, ' '), 40) + ') → 池首兜底');
+        return null;
+      } catch (e) {
+        note('[choose] fail-open → 池首兜底: ' + String((e && e.message) || e).slice(0, 120));
+        return null;
+      } finally {
+        if (cancelTimer) { try { cancelTimer(); } catch (e) {} }
+      }
+    }
+
+    // 讨论静默回复缓冲(供首测观察;正式行为=完全静默)
+    async function resolveRoute(robotId, conv, text) {
+      try { await ensureRepos(); } catch (e) { return null; }
+      var robot = await getRobot(robotId);
+      if (!robot || robot.enabled === false) return null;
+      // 范围过滤
+      if (robot.scope && robot.scope.mode === 'whitelist') {
+        var convs = robot.scope.convs || [];
+        if (convs.indexOf(conv) === -1) { note('[route] 事件来自范围外会话: ' + excerpt(conv, 16)); return null; }
+      }
+      // 绑定解析: 匹配 robotId + scope 命中 的第一条 enabled 绑定
+      var bindings = await listBindings();
+      var binding = null;
+      for (var i = 0; i < bindings.length; i++) {
+        var b = bindings[i];
+        if (b.robotId !== robotId || b.enabled === false) continue;
+        if (b.scope && b.scope.mode === 'whitelist' && (b.scope.convs || []).indexOf(conv) === -1) continue;
+        binding = b; break;
+      }
+      if (!binding) { note('[route] 无可用绑定: robot=' + robotId); return null; }
+      // Waker 池(记录序): 第一成员为兜底,其余成员为 AI 匹配候选(禁用者跳过)
+      var poolWakers = [];
+      var poolIds = binding.wakerPool || [];
+      for (var pi = 0; pi < poolIds.length; pi++) {
+        var pw = await getWaker(poolIds[pi]);
+        if (pw && pw.enabled !== false) poolWakers.push(pw);
+      }
+      if (!poolWakers.length) { note('[route] Waker 池为空或全部停用: ' + (binding.wakerPool || []).join(',')); return null; }
+      var waker = poolWakers[0];
+      var cfg = await readConfig();
+      var model = (binding.taskModel && binding.taskModel.provider) ? binding.taskModel
+        : (function () { var sel = ctx.agentDefaultModel.currentSelection(); return { provider: sel.provider, model: sel.model, reasoningEffort: sel.reasoningEffort }; })();
+      var judgeModel = (binding.assistModel && binding.assistModel.provider) ? binding.assistModel
+        : ((cfg.assistModel && cfg.assistModel.provider) ? cfg.assistModel : null);
+      return { robotId: robotId, waker: waker, model: model, binding: binding, judgeModel: judgeModel, wakerPool: poolWakers.map(function (w) { return w.id; }) };
+    }
+
+    function pollOnce(handle) {
+      try {
+        var out = handle.collected && handle.collected.stdout ? handle.collected.stdout.readFrom(state.stdoutOff) : null;
+        if (out) {
+          state.stdoutOff = out.nextOffset;
+          state.lineBuf += out.text || '';
+          var idx;
+          while ((idx = state.lineBuf.indexOf('\n')) !== -1) {
+            var line = state.lineBuf.slice(0, idx).trim();
+            state.lineBuf = state.lineBuf.slice(idx + 1);
+            if (line) handleLine(line);
+          }
+        }
+        var err = handle.collected && handle.collected.stderr ? handle.collected.stderr.readFrom(state.stderrOff) : null;
+        if (err && err.text && err.text.trim()) {
+          state.stderrOff = err.nextOffset;
+          note('[stderr] ' + err.text.trim());
+        }
+      } catch (e) {}
+    }
+
+    async function ensureBridge() {
+      if (state.bridge || state.starting) return;
+      state.starting = true; state.stopping = false;
+      state.phase = 'starting'; state.lastError = null; state.exitCode = null;
+      try {
+        var nodeExe = await ctx.subprocess.resolveExecutable('node');
+        var handle = ctx.subprocess.spawn({
+          argv: [nodeExe, BRIDGE_PATH],
+          stdio: {
+            stdin: 'pipe',
+            stdout: { maxBytes: 524288, spill: { maxBytes: 1048576 } },
+            stderr: { maxBytes: 262144, spill: { maxBytes: 524288 } }
+          },
+          graceMs: 1500,
+          env: { DTW_BRIDGE_TOKEN: token }
+        });
+        state.bridge = handle;
+        state.phase = 'running';
+        state.stdoutOff = 0; state.stderrOff = 0; state.lineBuf = '';
+        handle.done.then(function (outcome) {
+          if (state.bridge !== handle) return;
+          state.bridge = null;
+          state.sentConfig = null;
+          state.exitCode = (outcome && typeof outcome.code === 'number') ? outcome.code : null;
+          state.phase = state.stopping ? 'stopped' : 'exited';
+          note('桥接进程退出 (code ' + state.exitCode + ')');
+        }, function (e) {
+          if (state.bridge !== handle) return;
+          state.bridge = null; state.sentConfig = null;
+          state.phase = state.stopping ? 'stopped' : 'exited';
+          state.lastError = String((e && e.message) || e);
+        });
+        if (state.poll) state.poll();
+        state.poll = ctx.timer.interval(function () { if (state.bridge === handle) pollOnce(handle); }, 300);
+        note('桥接进程已启动');
+      } catch (e) {
+        state.phase = 'error';
+        state.lastError = String((e && e.message) || e);
+        note('启动失败: ' + state.lastError);
+      } finally {
+        state.starting = false;
+      }
+    }
+
+    function stopBridge() {
+      state.stopping = true;
+      if (state.poll) { state.poll(); state.poll = null; }
+      var handle = state.bridge;
+      state.bridge = null;
+      state.sentConfig = null;
+      state.phase = 'stopped';
+      watchdogs.forEach(function (stop) { try { stop(); } catch (e) {} });
+      watchdogs.clear();
+      if (handle) {
+        try { if (handle.stdin) handle.stdin.end(); } catch (e) {}
+        try {
+          var r = handle.terminate();
+          if (r && typeof r.catch === 'function') r.catch(function () {});
+        } catch (e) {}
+      }
+    }
+
+    async function recoverOnStart() {
+      var legacySessions = [];
+      try {
+        await withDomain(async function (d) {
+          var q = d.table('queue');
+          var items = [];
+          iterPairs(q).forEach(function (pair) {
+            var rec = pair[1];
+            if (rec && typeof rec.conv === 'string' && typeof rec.text === 'string') items.push(rec);
+          });
+          items.sort(function (a, b) { return (Number(a.seq) || 0) - (Number(b.seq) || 0); });
+          queueMem.push.apply(queueMem, items);
+          var m = d.table('mappings');
+          var toFail = [];
+          iterPairs(m).forEach(function (pair) {
+            var conv = pair[0];
+            var rec = pair[1];
+            if (rec && !rec.dead && (rec.state === 'running' || rec.state === 'needs-input')) toFail.push(conv);
+          });
+          for (var i = 0; i < toFail.length; i++) {
+            var rec2 = m.get(toFail[i]);
+            await m.put(toFail[i], Object.assign({}, rec2, { state: 'failed', endedAt: Date.now(), stateMsg: '任务因插件重启中断，可重试' }));
+          }
+          // 收集历史会话(非 dead 且有 sessionId),供后续回溯挂入工作区
+          iterPairs(m).forEach(function (pair) {
+            var rec = pair[1];
+            if (rec && !rec.dead && rec.sessionId) legacySessions.push({ sessionId: String(rec.sessionId), wakerId: rec.wakerId || null, projectRoot: rec.projectRoot || null, projectId: rec.projectId || null });
+          });
+        });
+        if (queueMem.length) note('恢复队列 ' + queueMem.length + ' 条');
+      } catch (e) {
+        note('恢复失败: ' + excerpt(e && e.message, 120));
+      }
+      // 回溯: 把历史 Waker 会话挂入按 cwd 匹配的工作区(优先 Waker 分组目录,兜底共享目录),
+      // 使任务看板「定位会话」与侧栏分组对历史任务同样生效。逐个尝试,失败静默(每个会话最多 2 次 attach 校验)。
+      try {
+        if (legacySessions.length && ctx.workspaceRegistry) {
+          var base = await wakerWorkspaceDir();
+          var baseWs = await ensureWakerWorkspace(base, 'Waker 任务');
+          if (baseWs && baseWs.title !== 'Waker 任务' && typeof baseWs.setTitle === 'function') {
+            try { await Promise.race([baseWs.setTitle('Waker 任务'), new Promise(function (res) { ctx.timer.setTimeout(res, 5000); })]); } catch (e) {}
+          }
+          var wakerDirs = {};
+          for (var li = 0; li < legacySessions.length; li++) {
+            var it = legacySessions[li];
+            var attached = false;
+            // 项目会话先挂项目组(realpath 化的项目路径自动注册同名工作区);
+            // attachSession 校验 realpath(cwd)===组路径,waker 组物理容不下项目 cwd 会话
+            if (it.projectRoot) {
+              var projWs = null;
+              try { projWs = await ensureWakerWorkspace(it.projectRoot, 'Waker 项目'); } catch (ePj) {}
+              if (projWs) {
+                try { await projWs.attachSession(it.sessionId); attached = true; } catch (ePj2) {}
+              }
+            }
+            if (!attached && it.wakerId) {
+              var wRec = null;
+              try { wRec = await getWaker(it.wakerId); } catch (e) {}
+              if (wRec) {
+                var dirName = wakerDirName(wRec.name || wRec.id);
+                if (!wakerDirs[dirName]) {
+                  var dir = base.replace(/\/+$/, '') + '/' + dirName;
+                  await ensureDir(dir);
+                  wakerDirs[dirName] = await ensureWakerWorkspace(dir, String(wRec.name || wRec.id));
+                }
+                if (wakerDirs[dirName]) {
+                  var wws = wakerDirs[dirName];
+                  var wTitle = String(wRec.name || wRec.id);
+                  if (wws.title !== wTitle && typeof wws.setTitle === 'function') {
+                    try { await Promise.race([wws.setTitle(wTitle), new Promise(function (res) { ctx.timer.setTimeout(res, 5000); })]); } catch (e) {}
+                  }
+                  try { await wws.attachSession(it.sessionId); attached = true; } catch (e) {}
+                }
+              }
+            }
+            if (!attached && baseWs) {
+              try { await baseWs.attachSession(it.sessionId); } catch (e) {}
+            }
+          }
+          note('已回溯挂接历史会话 ' + legacySessions.length + ' 个到工作区');
+        }
+      } catch (e) { note('历史会话回溯失败: ' + excerpt(e && e.message, 120)); }
+      // 能力治理自愈: 带 capabilities 的 waker 重建专属预设(目录缺失/漂移/跨重启);
+      // 无 capabilities 的清理残留生成目录
+      try {
+        var allW = await listWakers({ includeDisabled: true });
+        var healed = 0;
+        for (var wi = 0; wi < allW.length; wi++) {
+          var wRec = allW[wi];
+          try { await ensureWakerPreset(wRec); } catch (e) {}
+          if (wRec.capabilities) healed++;
+        }
+        if (healed) note('[preset] 能力预设自愈完成: ' + healed + ' 个 waker');
+      } catch (e) { note('[preset] 自愈失败: ' + excerpt(e && e.message, 100)); }
+    }
+
+    function statusPayload(cfg, secretSet, secretNote) {
+      return {
+        phase: state.phase,
+        pid: state.pid,
+        httpPort: state.httpPort,
+        bridge: state.bridgeStatus,
+        eventsSeen: state.eventsSeen,
+        inst: INSTANCE_ID,
+        lastEventAt: state.lastEventAt,
+        recentEvents: state.recentEvents.slice(),
+        lastError: state.lastError || null,
+        exitCode: (state.exitCode === undefined || state.exitCode === null) ? null : state.exitCode,
+        config: { clientId: cfg.clientId, autoStart: !!cfg.autoStart, concurrencyCap: cfg.concurrencyCap, cwd: cfg.cwd || '' },
+        secretSet: !!secretSet,
+        secretNote: secretNote || null,
+        logs: state.logs.slice(-8)
+      };
+    }
+
+    async function resolveSecret() {
+      try {
+        var s = await ctx.credentials.resolve(REF_SECRET);
+        return { set: !!(s && s.value), note: null };
+      } catch (e) {
+        return { set: false, note: String((e && e.message) || e) };
+      }
+    }
+
+    async function statusWithSecret() {
+      var cfg = await readConfig();
+      var sec = await resolveSecret();
+      return statusPayload(cfg, sec.set, sec.note);
+    }
+
+    // ---- Client RPC：静态包用 webServer HTTP 路由替代动态包的 harness.handle/host.call ----
+    // 与 dsh-mcp-manager 相同模式：Host 挂 /dsh-waker/api 前缀路由，Client 用 fetch 调用。
+    // webServer 为可选服务：不可用时设置页降级（钉钉回复链路不受影响）。
+    var INSTANCE_ID = Math.random().toString(36).slice(2, 8);
+    var rpcHandlers = {};
+    function rpcHandle(method, fn) { rpcHandlers[method] = fn; }
+    function rpcInvoke(method, args) {
+      var fn = rpcHandlers[method];
+      if (!fn) return Promise.reject(new Error('unknown method: ' + method));
+      try { return Promise.resolve(fn(args)); } catch (e) { return Promise.reject(e); }
+    }
+
+    var STATE_RANK = { 'needs-input': 0, running: 1, queued: 2, failed: 3, cancelled: 4, done: 5 };
+
+    rpcHandle('waker.getBoardData', async function () {
+      var tasks = [];
+      try {
+        await withDomain(async function (d) {
+          var table = d.table('mappings');
+          var candidates = [];
+          iterPairs(table).forEach(function (pair) {
+            var conv = pair[0];
+            var rec = pair[1];
+            if (!rec || rec.dead) return;
+            candidates.push({ conv: String(conv), rec: rec });
+          });
+          var snaps = {};
+          if (candidates.length && ctx.sessionQuery && ctx.sessionQuery.readTitleSnapshots) {
+            try {
+              var raw = await ctx.sessionQuery.readTitleSnapshots(candidates.map(function (c) { return c.rec.sessionId; }).filter(Boolean));
+              if (raw && typeof raw.get === 'function') {
+                candidates.forEach(function (c) {
+                  var snap = raw.get(c.rec.sessionId);
+                  if (snap && typeof snap.title === 'string') snaps[c.rec.sessionId] = snap.title;
+                });
+              } else if (raw && typeof raw === 'object') {
+                candidates.forEach(function (c) {
+                  var snap = raw[c.rec.sessionId];
+                  if (snap && typeof snap.title === 'string') snaps[c.rec.sessionId] = snap.title;
+                });
+              }
+            } catch (e) {}
+          }
+          var wakerInfo = {};
+          try {
+            await withDomain(async function (d2) {
+              iterPairs(d2.table('wakers')).forEach(function (pair) {
+                var w = pair[1];
+                if (w && w.id) wakerInfo[w.id] = { name: w.name || w.id, avatar: w.avatar || '', emoji: w.emoji || '' };
+              });
+            });
+          } catch (e) {}
+          candidates.forEach(function (c) {
+            var rec = c.rec;
+            tasks.push({
+              conversationId: c.conv,
+              sessionId: rec.sessionId || null,
+              title: typeof snaps[rec.sessionId] === 'string' ? snaps[rec.sessionId] : '',
+              state: rec.state || 'done',
+              turnCount: Number(rec.turnCount || 0),
+              updatedAt: Number(rec.endedAt || rec.startedAt || rec.queuedAt || rec.createdAt || 0),
+              stateMsg: rec.stateMsg || null,
+              wakerId: rec.wakerId || null,
+              wakerName: rec.wakerId && wakerInfo[rec.wakerId] ? wakerInfo[rec.wakerId].name : null,
+              wakerAvatar: rec.wakerId && wakerInfo[rec.wakerId] ? wakerInfo[rec.wakerId].avatar : '',
+              wakerEmoji: rec.wakerId && wakerInfo[rec.wakerId] ? (wakerInfo[rec.wakerId].emoji || '') : '',
+              robotId: rec.robotId || null,
+              sender: rec.sender || null
+            });
+          });
+        });
+      } catch (e) {
+        note('看板读取失败: ' + String((e && e.message) || e));
+      }
+      // 任务列表: 按最近更新时间倒序(新→旧),不再按状态分组排序
+      tasks.sort(function (a, b) {
+        return (b.updatedAt || 0) - (a.updatedAt || 0);
+      });
+      var stats = { queued: 0, running: 0, needsInput: 0, failed: 0, cancelled: 0, done: 0 };
+      tasks.forEach(function (t) {
+        if (t.state === 'needs-input') stats.needsInput += 1;
+        else if (stats[t.state] !== undefined) stats[t.state] += 1;
+      });
+      var cfg = await readConfig();
+      return { tasks: tasks, stats: stats, queueLen: queueMem.length, cap: cfg.concurrencyCap };
+    });
+
+    rpcHandle('waker.taskCancel', async function (args) {
+      var conv = String((args && args.conversationId) || '');
+      if (!conv) throw new Error('conversationId required');
+      var rec = await findMapping(conv);
+      var st = rec ? rec.state : null;
+      if (st === 'queued') {
+        queueMem = queueMem.filter(function (it) { return it.conv !== conv; });
+        try {
+          await withDomain(async function (d) {
+            var q = d.table('queue');
+            var keys = [];
+            iterPairs(q).forEach(function (pair) { if (pair[1] && pair[1].conv === conv) keys.push(pair[0]); });
+            for (var i = 0; i < keys.length; i++) await q.delete(keys[i]);
+          });
+        } catch (e) {}
+        await setTaskState(conv, { state: 'cancelled', endedAt: Date.now(), stateMsg: null });
+        disarmWatchdog(conv);
+        sendReply(conv, '任务已取消');
+        recordTurn(conv, 'cancelled', '');
+        return { ok: true, from: 'queued' };
+      }
+      if (st === 'running' || st === 'needs-input') {
+        var entry = rec && rec.sessionId ? live.get(rec.sessionId) : null;
+        if (entry) {
+          try { entry.handle.agent.cancel(new Error('用户取消')); } catch (e) {}
+        }
+        await setTaskState(conv, { state: 'cancelled', endedAt: Date.now(), stateMsg: null });
+        disarmWatchdog(conv);
+        sendReply(conv, '任务已取消');
+        recordTurn(conv, 'cancelled', '');
+        return { ok: true, from: st };
+      }
+      throw new Error('任务不在可取消状态（当前: ' + (st || '未知') + '）');
+    });
+
+    rpcHandle('waker.taskRetry', async function (args) {
+      var conv = String((args && args.conversationId) || '');
+      if (!conv) throw new Error('conversationId required');
+      var rec = await findMapping(conv);
+      if (!rec) throw new Error('映射不存在');
+      if (rec.state !== 'failed' && rec.state !== 'cancelled') throw new Error('只有失败或已取消的任务可重试');
+      var text = rec.lastUserText || '';
+      if (!text) throw new Error('没有可重试的消息内容');
+      var seq = ++seqCounter;
+      var item = { seq: seq, conv: conv, text: text, sender: rec.sender || '重试', enqueuedAt: Date.now(), forcedNew: false };
+      queueMem.unshift(item);
+      await withDomain(async function (d) { await d.table('queue').put(String(seq), item); });
+      await setTaskState(conv, { state: 'queued', queuedAt: Date.now(), stateMsg: null });
+      disarmWatchdog(conv);
+      sendReply(conv, '任务已重新排队');
+      recordTurn(conv, 'retry-queued', text);
+      pump();
+      return { ok: true };
+    });
+
+    rpcHandle('waker.status', async function () {
+      return statusWithSecret();
+    });
+
+    rpcHandle('waker.pipelineStatus', async function () {
+      var mappings = [];
+      try {
+        await withDomain(async function (d) {
+          var table = d.table('mappings');
+          var candidates = [];
+          iterPairs(table).forEach(function (pair) {
+            var conv = pair[0];
+            var rec = pair[1];
+            if (!rec || rec.dead) return;
+            if (typeof rec.sessionId !== 'string' || !rec.sessionId) return;
+            candidates.push({ conv: String(conv), sessionId: rec.sessionId });
+          });
+          var snaps = {};
+          if (candidates.length && ctx.sessionQuery && ctx.sessionQuery.readTitleSnapshots) {
+            try {
+              var raw = await ctx.sessionQuery.readTitleSnapshots(candidates.map(function (c) { return c.sessionId; }));
+              if (raw && typeof raw.get === 'function') {
+                candidates.forEach(function (c) {
+                  var snap = raw.get(c.sessionId);
+                  if (snap && typeof snap.title === 'string') snaps[c.sessionId] = snap.title;
+                });
+              } else if (raw && typeof raw === 'object') {
+                candidates.forEach(function (c) {
+                  var snap = raw[c.sessionId];
+                  if (snap && typeof snap.title === 'string') snaps[c.sessionId] = snap.title;
+                });
+              }
+            } catch (e) {}
+          }
+          candidates.forEach(function (c) {
+            var rec = table.get(c.conv);
+            mappings.push({
+              conversationId: c.conv,
+              sessionId: c.sessionId,
+              title: typeof snaps[c.sessionId] === 'string' ? snaps[c.sessionId] : '',
+              turnCount: rec ? Number(rec.turnCount || 0) : 0,
+              robotId: rec ? String(rec.robotId || '') : '',
+              wakerId: rec ? String(rec.wakerId || '') : '',
+              state: rec ? String(rec.state || '') : ''
+            });
+          });
+        });
+      } catch (e) {
+        note('读取映射失败: ' + String((e && e.message) || e));
+      }
+      return {
+        mappings: mappings,
+        recentTurns: recentTurns.slice(-20),
+        liveSessions: Array.from(live.keys()).map(String),
+        telemetry: {
+          atFiltered: telemetry.atFiltered,
+          judgeSilent: telemetry.judgeSilent,
+          judgeCalls: telemetry.judgeCalls,
+          judgeErrors: telemetry.judgeErrors
+        }
+      };
+    });
+
+    rpcHandle('waker.mappingUnbind', async function (args) {
+      var conv = String((args && args.conversationId) || '');
+      if (!conv) throw new Error('conversationId required');
+      await withDomain(async function (d) {
+        var table = d.table('mappings');
+        var rec = table.get(conv);
+        if (rec && rec.sessionId) {
+          var entry = live.get(rec.sessionId);
+          if (entry) {
+            live.delete(rec.sessionId);
+            starting.delete(rec.sessionId);
+            running.delete(rec.sessionId);
+            try {
+              var r = entry.handle.dispose();
+              if (r && typeof r.then === 'function') await r;
+            } catch (e) {}
+          }
+        }
+        await table.delete(conv);
+      });
+      disarmWatchdog(conv);
+      return { ok: true };
+    });
+
+    rpcHandle('waker.saveConfig', async function (args) {
+      var a = args || {};
+      var patch = {};
+      if (typeof a.autoStart === 'boolean') patch.autoStart = a.autoStart;
+      if (typeof a.concurrencyCap === 'number') patch.concurrencyCap = a.concurrencyCap;
+      if (typeof a.cwd === 'string') { patch.cwd = a.cwd.trim(); resolvedCwd = patch.cwd || null; }
+      if (typeof a.contextWindow === 'object' && a.contextWindow) patch.contextWindow = a.contextWindow;
+      if (a.judgeMode === 'on' || a.judgeMode === 'off') patch.judgeMode = a.judgeMode;
+      if (a.assistModel === null || (a.assistModel && typeof a.assistModel === 'object')) patch.assistModel = a.assistModel;
+      await writeConfig(patch);
+      // v4: clientId 变更 → 同步 robot-default 记录(兼容 MVP 设置卡片)
+      var applied = null;
+      if (typeof a.clientId === 'string' && a.clientId.trim()) {
+        try { await ensureRepos(); } catch (e) {}
+        try {
+          var def = await getRobot('robot-default');
+          if (!def) await saveRobot({ id: 'robot-default', name: '默认机器人', clientId: a.clientId.trim(), enabled: true });
+          else if (def.clientId !== a.clientId.trim()) await saveRobot({ id: 'robot-default', clientId: a.clientId.trim() });
+        } catch (e) { applied = { ok: false, error: String((e && e.message) || e) }; }
+      }
+      if (applied === null) applied = await pushRobots(false);
+      var cfg = await readConfig();
+      var sec = await resolveSecret();
+      var payload = statusPayload(cfg, sec.set, sec.note);
+      payload.saveNote = (applied && !applied.ok) ? applied.error : null;
+      return payload;
+    });
+
+    rpcHandle('waker.saveSecret', async function (args) {
+      var v = String((args && args.clientSecret) || '').trim();
+      var sec0 = await resolveSecret();
+      if (!v) {
+        var cfg0 = await readConfig();
+        var p0 = statusPayload(cfg0, sec0.set, sec0.note);
+        p0.error = 'Client Secret 不能为空';
+        return p0;
+      }
+      try {
+        await ctx.credentials.set(REF_SECRET, v);
+      } catch (e) {
+        var cfg1 = await readConfig();
+        var p1 = statusPayload(cfg1, sec0.set, sec0.note);
+        p1.error = String((e && e.message) || e);
+        return p1;
+      }
+      var applied = await pushConfig(true);
+      var cfg = await readConfig();
+      var sec = await resolveSecret();
+      var payload = statusPayload(cfg, sec.set, sec.note);
+      payload.saveNote = (applied && !applied.ok) ? applied.error : null;
+      return payload;
+    });
+
+    rpcHandle('waker.reconnect', async function () {
+      if (!state.bridge) {
+        state.stopping = false;
+        await ensureBridge();
+        return statusWithSecret();
+      }
+      // v4: 全量重发(diff 未变化时 force 重连全部会话)
+      var r = await pushRobots(true);
+      writeStdin({ action: 'reconnect' });
+      var payload = statusWithSecret();
+      payload.pushNote = (r && !r.ok) ? r.error : null;
+      return payload;
+    });
+
+    // ---- R2 RPC: robots / wakers / bindings / presets / llm ----
+    function ok(v) { return v || {}; } // 展平:数据直接作为 result,无 ok 包裹
+    function fail(e) { throw e; } // 错误上抛 → HTTP 500 → client api() reject
+
+    rpcHandle('waker.robots.get', async function () {
+      try {
+        await ensureRepos();
+        var rows = await listRobots();
+        var br = (state.bridgeStatus && state.bridgeStatus.robots) || {};
+        for (var i = 0; i < rows.length; i++) {
+          rows[i].hasSecret = await secretSet(rows[i].id);
+          rows[i].bridge = br[rows[i].id] || { phase: state.bridgeStatus ? 'absent' : null };
+          var rbE = state.evByRobot[rows[i].id];
+          rows[i].ev = rbE ? { seen: rbE.seen, lastAt: rbE.lastAt, recent: rbE.recent.slice() } : { seen: 0, lastAt: null, recent: [] };
+        }
+        return ok({ robots: rows });
+      } catch (e) { return fail(e); }
+    });
+
+    rpcHandle('waker.robots.save', async function (args) {
+      try {
+        await ensureRepos();
+        var rec = await saveRobot(args || {});
+        var applied = await pushRobots(false);
+        return ok({ robot: rec, pushNote: (applied && !applied.ok) ? applied.error : null });
+      } catch (e) { return fail(e); }
+    });
+
+    rpcHandle('waker.robots.delete', async function (args) {
+      try {
+        await ensureRepos();
+        var r = await deleteRobot(String((args && args.id) || ''));
+        if (r.ok) await pushRobots(false);
+        return { deleted: r.ok };
+      } catch (e) { return fail(e); }
+    });
+
+    rpcHandle('waker.robots.toggle', async function (args) {
+      try {
+        await ensureRepos();
+        var id = String((args && args.id) || '');
+        var rec = await getRobot(id);
+        if (!rec) return fail(new Error('机器人不存在'));
+        rec.enabled = args && typeof args.enabled === 'boolean' ? args.enabled : !rec.enabled;
+        await tablePut('robots', id, rec);
+        var applied = await pushRobots(false);
+        return ok({ robot: rec, pushNote: (applied && !applied.ok) ? applied.error : null });
+      } catch (e) { return fail(e); }
+    });
+
+    rpcHandle('waker.robots.reconnect', async function (args) {
+      try {
+        var id = String((args && args.id) || 'robot-default');
+        var rec = await getRobot(id);
+        if (!rec) return fail(new Error('机器人不存在'));
+        var sv = '';
+        try { var s = await ctx.credentials.resolve(robotSecretRef(id)); sv = (s && s.value) || ''; } catch (e) {}
+        if (!sv) return fail(new Error('缺少 Client Secret（' + robotSecretRef(id) + '）'));
+        if (!state.bridge) { state.stopping = false; await ensureBridge(); }
+        else writeStdin({ action: 'reconnect-robot', robotId: id, clientId: rec.clientId, clientSecret: sv });
+        return ok();
+      } catch (e) { return fail(e); }
+    });
+
+    rpcHandle('waker.robots.diag', async function (args) {
+      try {
+        var id = String((args && args.id) || 'robot-default');
+        var rec = await getRobot(id);
+        if (!rec) return fail(new Error('机器人不存在'));
+        var sv = '';
+        try { var s = await ctx.credentials.resolve(robotSecretRef(id)); sv = (s && s.value) || ''; } catch (e) {}
+        var hasSecret = !!sv;
+        var steps = [];
+        steps.push({ step: '凭据', ok: !!(rec.clientId && hasSecret), msg: rec.clientId ? (hasSecret ? 'clientId+secret 齐全' : 'secret 未设置') : 'clientId 未设置' });
+        if (!state.bridge) {
+          state.stopping = false;
+          try { await ensureBridge(); steps.push({ step: '桥接进程', ok: true, msg: '已启动' }); }
+          catch (e) { steps.push({ step: '桥接进程', ok: false, msg: excerpt(e && e.message, 100) }); }
+        } else {
+          steps.push({ step: '桥接进程', ok: true, msg: '运行中' });
+        }
+        if (state.bridge && rec.clientId && hasSecret) {
+          writeStdin({ action: 'reconnect-robot', robotId: id, clientId: rec.clientId, clientSecret: sv });
+          // 等 4s 让 Stream 连接状态回来
+          await new Promise(function (res) { ctx.timer.setTimeout(res, 4000); });
+        }
+        var bs = state.bridgeStatus || {};
+        var rb = (bs.robots || {})[id] || null;
+        steps.push({ step: 'Stream 连接', ok: rb && rb.phase === 'connected', msg: rb ? rb.phase : (state.bridgeStatus ? 'absent' : '未知') });
+        steps.push({ step: '事件流入', ok: state.eventsSeen > 0, msg: state.eventsSeen + ' 条事件 · 最近 ' + (state.lastEventAt ? new Date(state.lastEventAt).toLocaleTimeString() : '无') });
+        return ok({ steps: steps, phase: rb ? rb.phase : null, lastError: (rb && rb.lastError) || bs.lastError || null, reconnectAttempts: bs.reconnectAttempts || 0 });
+      } catch (e) { return fail(e); }
+    });
+
+    rpcHandle('waker.presets.list', async function () {
+      try {
+        var list = await ctx.agentPresets.list();
+        var def = await ctx.agentPresets.resolve();
+        return ok({
+          presets: list.map(function (p) {
+            return { id: p.id, name: p.name || p.id, description: p.description || '', isDefault: p.id === def.id, broken: !!p.broken };
+          })
+        });
+      } catch (e) { return fail(e); }
+    });
+
+    // ---- capabilities catalog: 能力页签数据源(全部来自全局,只读引用) ----
+    // 内置能力组静态 profile(组→standard 行;基线见 WAKER_CAP_GROUPS 注释),
+    // MCP 工具来自全局 ToolRuntime(mcp__ 前缀),技能来自全局 skills 目录扫描。
+    var WAKER_CAP_GROUPS = [
+      { id: 'core', label: '基础执行', desc: 'Shell、文件读写与检索——绝大多数任务的底座', locked: true, rows: ['tool-bash', 'tool-pwsh', 'tool-fs', 'tool-fs-search'] },
+      { id: 'process', label: '任务过程', desc: '后台作业、待办清单、向群内追问确认(问答桥依赖)', locked: true, rows: ['tool-jobs', 'tool-todo', 'tool-ask-user'] },
+      { id: 'skills', label: '技能', desc: '加载并调用全局已安装的 Skills(按下方技能白名单引用)', locked: true, rows: ['skill-filesystem', 'tool-skill'] },
+      { id: 'planning', label: '规划', desc: '计划模式与任务规划工具', locked: false, rows: ['planning'] },
+      { id: 'delegation', label: '子代理与工作流', desc: '子代理委派、工作流编排、Ralph 循环', locked: false, rows: ['delegation'] },
+      { id: 'goal', label: '目标', desc: '跨轮次长期目标的建立与推进', locked: false, rows: ['command-goal', 'tool-goal'] },
+      { id: 'web', label: '联网检索', desc: '网页搜索与页面抓取', locked: false, rows: ['tool-web'] }
+    ];
+    // mcp__<server>__<tool> 解析: 工具名自身可含下划线(tapd_list_projects),按第一个 __ 切分
+    function parseMcpToolName(name) {
+      var rest = String(name || '');
+      if (rest.indexOf('mcp__') !== 0) return null;
+      rest = rest.slice(5);
+      var idx = rest.indexOf('__');
+      if (idx <= 0 || idx === rest.length - 2) return null;
+      return { server: rest.slice(0, idx), tool: rest.slice(idx + 2) };
+    }
+    async function listGlobalMcpTools() {
+      var toolsSvc = ctx.get ? ctx.get('tools') : null;
+      var schemas = [];
+      try { schemas = (toolsSvc && typeof toolsSvc.schemas === 'function') ? (toolsSvc.schemas() || []) : []; } catch (e) { schemas = []; }
+      var servers = {};
+      for (var i = 0; i < schemas.length; i++) {
+        var name = String(schemas[i].name || '');
+        var parsed = parseMcpToolName(name);
+        if (!parsed) continue;
+        var server = parsed.server, tool = parsed.tool;
+        if (!servers[server]) servers[server] = { name: server, tools: [] };
+        servers[server].tools.push({ name: name, tool: tool, description: String(schemas[i].description || '').slice(0, 120) });
+      }
+      return Object.keys(servers).sort().map(function (k) { return servers[k]; });
+    }
+    async function listGlobalSkills() {
+      // host 作用域的 skills 服务不含 filesystem provider —— 直接扫 ~/.dsh/skills/*/SKILL.md
+      var node = await ctx.subprocess.resolveExecutable('node');
+      var home = await resolveDshHomeDir();
+      var script = [
+        'const fs=require("fs"),path=require("path");',
+        'const root=process.argv[1];',
+        'const out=[];',
+        'let entries=[];try{entries=fs.readdirSync(root,{withFileTypes:true})}catch(e){process.stdout.write("[]");process.exit(0)}',
+        'for(const d of entries){',
+        ' if(!d.isDirectory())continue;',
+        ' const dir=path.join(root,d.name);',
+        ' const sf=path.join(dir,"SKILL.md");',
+        ' if(!fs.existsSync(sf))continue;',
+        ' let name=d.name,desc="";',
+        ' try{',
+        '  const t=fs.readFileSync(sf,"utf8").slice(0,4096);',
+        '  const m=t.match(/^---[\\s\\S]*?^---/m);',
+        '  if(m){const fm=m[0];const nm=fm.match(/^name:\\s*(.+)$/m);if(nm)name=nm[1].trim();const dm=fm.match(/^description:\\s*(.+)$/m);if(dm)desc=dm[1].trim();}',
+        ' }catch(e){}',
+        ' out.push({name:name,description:desc.slice(0,120),dir:dir});',
+        '}',
+        'process.stdout.write(JSON.stringify(out));'
+      ].join('');
+      var h = ctx.subprocess.spawn({ argv: [node, '-e', script, home + '/skills'], cwd: '/', stdio: { stdin: 'ignore', stdout: 'pipe', stderr: { maxBytes: 8192 } }, graceMs: 4000 });
+      var chunks = [];
+      try {
+        if (h.stdout && typeof h.stdout.on === 'function') {
+          h.stdout.on('data', function (c) { chunks.push(Buffer.from(c)); });
+          h.stdout.on('error', function () {});
+        }
+        var o = await h.done;
+        if (!o || o.exitCode !== 0) return [];
+        var text = Buffer.concat(chunks).toString('utf8');
+        if (!text) return [];
+        var arr = JSON.parse(text);
+        return Array.isArray(arr) ? arr : [];
+      } catch (e) { return []; }
+    }
+    async function resolveDshHomeDir() {
+      // 与 wakerWorkspaceDir 同源: DSH_HOME > HOME/.dsh
+      return (typeof process !== 'undefined' && process.env && process.env.DSH_HOME)
+        ? String(process.env.DSH_HOME)
+        : ((typeof process !== 'undefined' && process.env && process.env.HOME) ? process.env.HOME + '/.dsh' : '');
+    }
+    rpcHandle('waker.capabilities.catalog', async function () {
+      try {
+        var groups = WAKER_CAP_GROUPS;
+        var mcp = await listGlobalMcpTools().catch(function () { return []; });
+        var skills = await listGlobalSkills().catch(function () { return []; });
+        return ok({ builtinGroups: groups, mcpServers: mcp, skills: skills });
+      } catch (e) { return fail(e); }
+    });
+
+    // ---- R2.5 RPC: projects(来源项目) ----
+    rpcHandle('waker.projects.get', async function (args) {
+      try {
+        await ensureRepos();
+        var rows = await listProjects();
+        return ok({
+          projects: rows,
+          wakers: await listWakers({ includeDisabled: true }).then(function (ws) {
+            return ws.map(function (w) { return { id: w.id, name: w.name, emoji: w.emoji || '🤖', avatar: w.avatar || '' }; });
+          })
+        });
+      } catch (e) { return fail(e); }
+    });
+
+    // 系统文件夹选择: 复用宿主 directoryPicker 原生能力(macOS osascript choose folder);
+    // browse 后端(无显示器/远程)不支持单次弹窗,客户端回退手动输入。
+    var pickInFlight = false;
+    var PICK_TIMEOUT_MS = 180000; // 3 分钟无人操作自动收起,防对话框/进程悬挂
+    rpcHandle('waker.projects.pickFolder', async function () {
+      if (pickInFlight) return fail(new Error('文件夹选择器已打开，请先完成或取消'));
+      var dp = ctx.get ? ctx.get('directoryPicker') : null;
+      if (!dp || typeof dp.capability !== 'function') return fail(new Error('当前环境未提供目录选择服务，请手动输入路径'));
+      var cap = dp.capability();
+      if (!cap || cap.kind !== 'native' || typeof cap.pick !== 'function') return ok({ unsupported: true });
+      pickInFlight = true;
+      var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      var cancelTimer = ctx.timer && ctx.timer.setTimeout ? ctx.timer.setTimeout(function () { if (ctrl) ctrl.abort(); }, PICK_TIMEOUT_MS) : null;
+      try {
+        var picked = await cap.pick(ctrl ? ctrl.signal : undefined); // 绝对路径 | null=用户取消/超时收起
+        if (picked === null || picked === undefined) return ok({ canceled: true });
+        return ok({ path: String(picked) });
+      } catch (e) {
+        if (ctrl && ctrl.signal.aborted) return ok({ canceled: true });
+        // 系统选择器失败(权限/子进程异常):收敛为简短提示,不外泄底层命令行
+        var msg = String((e && e.message) || e);
+        if (msg.indexOf('Command failed') === 0 || msg.indexOf('osascript') !== -1) msg = '系统文件夹选择器启动失败，请手动输入路径';
+        return fail(new Error(msg));
+      } finally {
+        pickInFlight = false;
+        if (cancelTimer) { try { cancelTimer(); } catch (e2) {} }
+      }
+    });
+
+    // 模型目录(供绑定表单按 provider 分组下拉选择): 对齐宿主 buildModelCatalog 逻辑,
+    // listProviders → 逐 provider listModels(8s 超时容错),整体 60s 缓存。
+    var modelCatalogCache = null;
+    function listModelsWithTimeout(llm, providerId, ms) {
+      return new Promise(function (resolve) {
+        var done = false;
+        var finish = function (v) { if (!done) { done = true; try { if (t) t(); } catch (e1) {} resolve(v); } };
+        var t = ctx.timer && ctx.timer.setTimeout ? ctx.timer.setTimeout(function () { finish(null); }, ms) : null;
+        Promise.resolve().then(function () { return llm.listModels(providerId); })
+          .then(function (v) { finish(v || null); })
+          .catch(function () { finish(null); });
+      });
+    }
+    rpcHandle('waker.models.list', async function () {
+      var now = Date.now();
+      if (modelCatalogCache && now - modelCatalogCache.at < 60000) return ok(modelCatalogCache.data);
+      var llm = ctx.get ? ctx.get('llm') : null;
+      var groups = [];
+      var failures = [];
+      if (llm && typeof llm.listProviders === 'function') {
+        var providers = [];
+        try { providers = llm.listProviders() || []; } catch (e) { providers = []; }
+        var results = await Promise.all(providers.map(async function (p) {
+          var id = (p && p.id) || '';
+          var name = (p && p.name) || id;
+          if (!id) return null;
+          var models = await listModelsWithTimeout(llm, id, 8000);
+          if (models === null) { failures.push(name); return null; }
+          return {
+            id: id, name: name,
+            models: (models || []).map(function (m) { return { id: (m && m.id) || '', name: (m && m.name) || (m && m.id) || '' }; })
+              .filter(function (m) { return m.id; })
+          };
+        }));
+        groups = results.filter(function (g) { return g && g.models.length > 0; });
+      }
+      var def = null;
+      try {
+        var sel = ctx.agentDefaultModel.currentSelection();
+        if (sel && sel.provider) def = { provider: sel.provider, model: sel.model, reasoningEffort: sel.reasoningEffort };
+      } catch (e) {}
+      var data = { groups: groups, failures: failures, default: def };
+      modelCatalogCache = { at: now, data: data };
+      return ok(data);
+    });
+
+    rpcHandle('waker.projects.save', async function (args) {
+      try {
+        await ensureRepos();
+        var a = args || {};
+        var id = String(a.id || '').trim() || reposId('proj');
+        var cur = await getProject(id);
+        var merged = Object.assign({}, cur || {}, {
+          id: id, name: String(a.name || '').slice(0, 80),
+          scope: a.scope === 'waker' ? 'waker' : 'public',
+          ownerWakerId: a.scope === 'waker' ? String(a.ownerWakerId || '') : '',
+          ownerWakerIds: a.scope === 'waker'
+            ? normalizeWakerIds(a.ownerWakerIds || (a.ownerWakerId ? [a.ownerWakerId] : []))
+            : [],
+          kind: a.kind === 'git' ? 'git' : 'local',
+          path: a.kind === 'git' ? '' : String(a.path || '').trim(),
+          gitUrl: a.kind === 'git' ? String(a.gitUrl || '').trim() : '',
+          branch: a.kind === 'git' ? (String(a.branch || 'main').trim() || 'main') : '',
+          localPath: a.kind === 'git' ? (String(a.localPath || '').trim() || String(id)) : ''
+        });
+        if (!merged.name) return fail(new Error('name required'));
+        if (merged.scope === 'waker' && !merged.ownerWakerIds.length) return fail(new Error('Waker 专属项目需要至少选择一个 Waker'));
+        if (merged.kind === 'local' && !merged.path) return fail(new Error('本地项目需要填写路径'));
+        if (merged.kind === 'git' && !merged.gitUrl) return fail(new Error('Git 项目需要填写仓库地址'));
+        // Git: 首次保存即 clone 到本地(失败置 error 状态但保留记录便于改分支重试)
+        if (merged.kind === 'git') {
+          var localDir = merged.localPath.indexOf('/') === 0 ? merged.localPath
+            : (FALLBACK_CWD || (typeof process !== 'undefined' && process.env.HOME ? process.env.HOME + '/.dsh/waker-projects' : '.')).replace(/\/+$/, '') + '/' + merged.localPath;
+          merged.localPath = localDir;
+          if (!cur || cur.gitUrl !== merged.gitUrl || cur.branch !== merged.branch || cur.status === 'error') {
+            try {
+              merged.status = 'ready'; merged.lastError = null;
+              await ensureParentDir(localDir);
+              await gitSync(merged, true);
+            } catch (e) {
+              merged.status = 'error';
+              merged.lastError = String((e && e.message) || e);
+            }
+          } else {
+            try { merged.status = 'ready'; merged.lastError = null; await gitSync(merged, false); } catch (e) { merged.status = 'error'; merged.lastError = String((e && e.message) || e); }
+          }
+        } else {
+          merged.status = 'ready';
+        }
+        merged.updatedAt = Date.now();
+        await tablePut('projects', id, merged);
+        return ok({ project: merged });
+      } catch (e) { return fail(e); }
+    });
+
+    rpcHandle('waker.projects.refresh', async function (args) {
+      try {
+        await ensureRepos();
+        var id = String((args && args.id) || '');
+        var p = await getProject(id);
+        if (!p) return fail(new Error('项目不存在'));
+        if (p.kind !== 'git') return ok({ project: p, note: null });
+        try {
+          await gitSync(p, false, true);
+          p.status = 'ready'; p.lastError = null;
+        } catch (e) {
+          p.status = 'error'; p.lastError = String((e && e.message) || e);
+        }
+        p.updatedAt = Date.now();
+        await tablePut('projects', id, p);
+        return ok({ project: p, note: p.status === 'error' ? p.lastError : '已拉取最新代码' });
+      } catch (e) { return fail(e); }
+    });
+
+    rpcHandle('waker.projects.delete', async function (args) {
+      try {
+        await ensureRepos();
+        var id = String((args && args.id) || '');
+        await tableDelete('projects', id);
+        // 清空仍引用该项目的 Waker 绑定,避免悬空 projectId
+        var ws = await listWakers({ includeDisabled: true });
+        for (var wi = 0; wi < ws.length; wi++) {
+          if (String(ws[wi].projectId || '') === id) {
+            await saveWaker({ id: ws[wi].id, projectId: '' });
+          }
+        }
+        return { deleted: true };
+      } catch (e) { return fail(e); }
+    });
+
+    // ---- avatar 资源: 列表/上传/删除(resource/img 目录) ----
+    rpcHandle('waker.avatars.list', async function () {
+      try {
+        var items = await listAvatars();
+        return ok({ avatars: items });
+      } catch (e) { return fail(e); }
+    });
+    rpcHandle('waker.avatars.upload', async function (args) {
+      try {
+        var a = args || {};
+        var file = await uploadAvatar(a.name, a.data);
+        var items = await listAvatars();
+        return ok({ file: file, avatars: items });
+      } catch (e) { return fail(e); }
+    });
+    rpcHandle('waker.avatars.delete', async function (args) {
+      try {
+        var a = args || {};
+        await deleteAvatar(a.file);
+        // 同步清掉引用它的 Waker.avatar
+        var ws = await listWakers({ includeDisabled: true });
+        for (var wi = 0; wi < ws.length; wi++) {
+          if (String(ws[wi].avatar || '') === String(a.file || '')) {
+            await saveWaker({ id: ws[wi].id, avatar: '' });
+          }
+        }
+        return ok({ deleted: true });
+      } catch (e) { return fail(e); }
+    });
+
+    rpcHandle('waker.llm.providers', async function () {
+      try {
+        var llm = ctx.get ? ctx.get('llm') : null;
+        var out = [];
+        if (llm && typeof llm.listProviders === 'function') {
+          var provs = await llm.listProviders();
+          for (var i = 0; i < provs.length; i++) {
+            var p = provs[i];
+            var entry = { provider: p.provider || p.id || String(p), models: [] };
+            try {
+              if (typeof p.listModels === 'function') entry.models = (await p.listModels()).map(function (m) { return (typeof m === 'string') ? m : (m.id || m.model || String(m)); });
+              else if (llm.listModels) {
+                var ms = await llm.listModels({ provider: entry.provider });
+                entry.models = (ms || []).map(function (m) { return (typeof m === 'string') ? m : (m.id || m.model || String(m)); });
+              }
+            } catch (e) { /* provider 失败静默跳过 */ }
+            out.push(entry);
+          }
+        }
+        var sel = ctx.agentDefaultModel.currentSelection();
+        return ok({ providers: out, defaultSelection: sel });
+      } catch (e) { return fail(e); }
+    });
+
+    rpcHandle('waker.wakers.get', async function (args) {
+      try {
+        await ensureRepos();
+        var rows = await listWakers({ includeDisabled: !!(args && args.includeDisabled) });
+        var used = {};
+        rows.forEach(function (w) { used[w.presetId] = true; });
+        return ok({ wakers: rows, activeByWaker: rows.reduce(function (m, w) { m[w.id] = activeForWaker(w.id); return m; }, {}) });
+      } catch (e) { return fail(e); }
+    });
+
+    rpcHandle('waker.wakers.save', async function (args) {
+      try {
+        await ensureRepos();
+        var rec = await saveWaker(args || {});
+        return ok({ waker: rec });
+      } catch (e) { return fail(e); }
+    });
+
+    rpcHandle('waker.wakers.delete', async function (args) {
+      try {
+        await ensureRepos();
+        var id = String((args && args.id) || '');
+        var confirm = !!(args && args.confirm);
+        var r = confirm ? await deleteWakerConfirmed(id) : await deleteWaker(id);
+        if (!r.ok) {
+          if (r.needsConfirm) throw Object.assign(new Error(r.error), { code: 'NEEDS_CONFIRM' });
+          throw new Error(r.error || '删除失败');
+        }
+        return { deleted: true };
+      } catch (e) { return fail(e); }
+    });
+
+    rpcHandle('waker.wakers.toggle', async function (args) {
+      try {
+        await ensureRepos();
+        var id = String((args && args.id) || '');
+        var rec = await getWaker(id);
+        if (!rec) return fail(new Error('Waker 不存在'));
+        rec.enabled = args && typeof args.enabled === 'boolean' ? args.enabled : !rec.enabled;
+        await tablePut('wakers', id, rec);
+        return ok({ waker: rec });
+      } catch (e) { return fail(e); }
+    });
+
+    rpcHandle('waker.wakers.resetBuiltins', async function () {
+      try {
+        await ensureRepos();
+        return await resetBuiltinWakers();
+      } catch (e) { return fail(e); }
+    });
+
+    rpcHandle('waker.bindings.get', async function () {
+      try {
+        await ensureRepos();
+        var rows = await listBindings();
+        var robots = await listRobots();
+        var wakers = await listWakers({ includeDisabled: true });
+        return ok({ bindings: rows, robots: robots, wakers: wakers });
+      } catch (e) { return fail(e); }
+    });
+
+    rpcHandle('waker.bindings.save', async function (args) {
+      try {
+        await ensureRepos();
+        var rec = await saveBinding(args || {});
+        return ok({ binding: rec });
+      } catch (e) { return fail(e); }
+    });
+
+    rpcHandle('waker.bindings.delete', async function (args) {
+      try {
+        await ensureRepos();
+        var r = await deleteBinding(String((args && args.id) || ''));
+        if (!r.ok) throw new Error(r.error || '删除失败');
+        return { deleted: true };
+      } catch (e) { return fail(e); }
+    });
+
+    rpcHandle('waker.bindings.toggle', async function (args) {
+      try {
+        await ensureRepos();
+        var id = String((args && args.id) || '');
+        var rec = await getBinding(id);
+        if (!rec) return fail(new Error('绑定不存在'));
+        rec.enabled = args && typeof args.enabled === 'boolean' ? args.enabled : !rec.enabled;
+        await tablePut('bindings', id, rec);
+        return ok({ binding: rec });
+      } catch (e) { return fail(e); }
+    });
+
+
+    // ---- 开发辅助：模拟钉钉事件（仅 DSH_WAKER_DEV=1 时注册）----
+    // 让"改代码 → 测试"不依赖真实钉钉链路：注入的事件与桥接上报完全同构，
+    // 走同一条 handleLine 管线（建映射/投递/排队/状态流转全真）。
+    // 唯一差异：sendReply 经桥接 stdin 发出，桥接未连时返回 false（跳过发送，
+    // 不影响管线）。生产构建（无该环境变量）下此 RPC 不存在。
+    if (typeof process !== 'undefined' && process.env && process.env.DSH_WAKER_DEV === '1') {
+      rpcHandle('waker.injectEvent', async function (args) {
+        var a = args || {};
+        var rid8 = Math.random().toString(36).slice(2, 10);
+        var conv = a.conversationId || ('cidDevTest' + rid8 + '==');
+        var text = String(a.text || '你好');
+        var sender = String(a.sender || '开发测试');
+        // R2: 与桥接 v4 事件形状对齐(robotId 顶层 + data 携带 @ 字段),走真实管道
+        var line = {
+          type: 'event', kind: 'bot-message', robotId: a.robotId || 'robot-default', receivedAt: Date.now(),
+          data: {
+            conversationId: conv,
+            conversationType: a.conversationType === '2' || a.conversationType === 2 ? '2' : '1',
+            senderNick: sender,
+            senderStaffId: 'dev-' + rid8,
+            isAtAll: a.isAtAll === true,
+            atUsers: Array.isArray(a.atUsers) ? a.atUsers : [],
+            text: { content: text }
+          }
+        };
+        handleLine(JSON.stringify(line));
+        return { ok: true, injected: true, conversationId: conv, eventsSeenAfter: state.eventsSeen, phase: state.phase, pid: process.pid, inst: INSTANCE_ID };
+      });
+
+      rpcHandle('waker.injectScript', async function (args) {
+        var a = args || {};
+        var conv = a.conversationId || null;
+        var texts = Array.isArray(a.texts) ? a.texts.map(String) : [];
+        var delay = typeof a.delayMs === 'number' ? Math.max(200, a.delayMs) : 1200;
+        var results = [];
+        for (var i = 0; i < texts.length; i++) {
+          var r = await rpcInvoke('waker.injectEvent', { conversationId: conv, text: texts[i], sender: '开发测试' })
+            .catch(function (e) { return { ok: false, error: String((e && e.message) || e) }; });
+          results.push(r);
+          if (i < texts.length - 1) await new Promise(function (resolve) { setTimeout(resolve, delay); });
+        }
+        return { ok: true, count: results.length, results: results };
+      });
+    }
+
+    // 头像静态文件: 读取 AVATAR_DIR 下文件回二进制(文件名仅作 basename 校验)
+    // 经 subprocess stdout:'pipe' 拿真 Node stream 收集 Buffer(collect 文本化会破坏二进制)
+    async function avatarReadFile(file) {
+      var node = await ctx.subprocess.resolveExecutable('node');
+      var script = 'const fs=require("fs");const p=process.argv[1];try{const b=fs.readFileSync(p);process.stdout.write(b)}catch(e){process.exit(1)}';
+      var h = ctx.subprocess.spawn({ argv: [node, '-e', script, AVATAR_DIR + file], cwd: '/', stdio: { stdin: 'ignore', stdout: 'pipe', stderr: { maxBytes: 8192 } }, graceMs: 2000 });
+      var chunks = [];
+      var settled = false;
+      var resPromise = new Promise(function (resolve) {
+        var errTxt = '';
+        var a = 0;
+        var errReads = function () {
+          try { var er = h.collected.stderr.readFrom(a); a = er.nextOffset; errTxt += er.text; } catch (e) {}
+        };
+        errReads();
+        var pt = ctx.timer.interval(errReads, 120);
+        var out = h.stdout;
+        if (!out) { if (pt) pt(); resolve(null); return; }
+        out.on('data', function (c) { chunks.push(Buffer.from(c)); });
+        out.on('error', function () {});
+        h.done.then(function (o) {
+          if (pt) pt();
+          if (!o || o.exitCode !== 0) { resolve(null); return; }
+          try { resolve(Buffer.concat(chunks)); } catch (e) { resolve(null); }
+        });
+      });
+      return resPromise;
+    }
+    async function serveImg(req, res) {
+      var pathname = '';
+      try { pathname = new URL(req.url, 'http://x').pathname; } catch (e) {}
+      var file = decodeURIComponent(pathname.split('/').pop() || '');
+      if (!file || file.indexOf('/') !== -1 || file.indexOf('..') !== -1) {
+        try { res.writeHead(404); res.end('not found'); } catch (e) {}
+        return;
+      }
+      try {
+        var buf = await avatarReadFile(file);
+        if (!buf) { try { res.writeHead(404); res.end('not found'); } catch (e) {} return; }
+        var m = file.match(/\.([a-z]+)$/i);
+        var ct = m ? ({ png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' }[m[1].toLowerCase()] || 'application/octet-stream') : 'application/octet-stream';
+        res.writeHead(200, { 'content-type': ct, 'cache-control': 'no-cache' });
+        res.end(buf);
+      } catch (e) {
+        try { res.writeHead(500); res.end('error'); } catch (e2) {}
+      }
+    }
+
+    async function serveApi(req, res) {
+      var send = function (code, obj) {
+        try {
+          res.writeHead(code, { 'content-type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify(obj));
+        } catch (e) {}
+      };
+      var path = '';
+      try { path = new URL(req.url, 'http://x').pathname.replace(/\/+$/, ''); } catch (e) {}
+      if (path === '/dsh-waker/api/health') {
+        send(200, { ok: true, name: 'dsh-waker', phase: state.phase, bridge: state.bridgeStatus, eventsSeen: state.eventsSeen });
+        return;
+      }
+      if (path === '/dsh-waker/api/rpc' && req.method === 'POST') {
+        var chunks = [];
+        req.on('data', function (c) { chunks.push(c); });
+        req.on('end', async function () {
+          var payload;
+          try { payload = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); } catch (e) { send(400, { ok: false, error: 'invalid JSON' }); return; }
+          var fn = rpcHandlers[payload && payload.method];
+          if (!fn) { send(404, { ok: false, error: 'unknown method: ' + String(payload && payload.method) }); return; }
+          try {
+            var result = await fn((payload && payload.args) || {});
+            send(200, { ok: true, result: result });
+          } catch (e) {
+            send(500, { ok: false, error: String((e && e.message) || e) });
+          }
+        });
+        return;
+      }
+      send(404, { ok: false, error: 'not found' });
+    }
+
+    var webServer = ctx.get('webServer');
+    if (webServer && typeof webServer.register === 'function') {
+      ctx.effect(function () {
+        var off1 = webServer.register({ kind: 'prefix', path: '/dsh-waker/api', handler: serveApi });
+        var off2 = null;
+        try { off2 = webServer.register({ kind: 'prefix', path: '/dsh-waker/img', handler: serveImg }); } catch (e) { note('img 路由注册失败: ' + String((e && e.message) || e)); }
+        return function () { try { if (off1) off1(); } catch (e) {} try { if (off2) off2(); } catch (e) {} };
+      }, 'waker api routes');
+      note('已注册 /dsh-waker/api 与 /dsh-waker/img 路由（设置页 RPC / 头像静态资源可用）');
+    } else {
+      note('webServer 不可用：设置页 RPC 降级（钉钉回复链路不受影响）');
+    }
+
+    ctx.effect(function () {
+      recoverOnStart().then(function () {
+        ensureBridge().catch(function () {});
+        pump();
+      });
+      // 周期兜底 pump: 并发空位出现但无新事件时,排队任务也能继续消化
+      var pumpTimer = ctx.timer.interval(function () { if (queueMem.length) pump(); }, 15000);
+      return function () { if (pumpTimer) pumpTimer(); stopBridge(); };
+    }, 'waker bridge lifecycle');
+
+    console.log('[waker] dsh-waker host half applied (static package)');
+  }
+};
