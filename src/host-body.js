@@ -292,27 +292,49 @@ return {
       return lines.join('\n') + '\n';
     }
     async function buildWakerSkillDir(wakerId, skillNames) {
-      // 聚合目录 ~/.dsh/waker-skills/<wakerId>/: 内放指向 ~/.dsh/skills/<name> 的符号链接(纯引用)
-      var home = await resolveDshHomeDir();
-      if (!home) return null;
-      var aggDir = home + '/waker-skills/' + String(wakerId);
+      // 聚合目录 ~/.dsh/waker-skills/<wakerId>/: 内放指向全局已装技能目录的符号链接(纯引用)。
+      // 技能可能分布在多个默认根(dshHome/skills / agentsHome/skills / bundled), 逐根解析同名技能;
+      // 同时支持技能本身是根级 .md 文件的形态(链接文件)。
+      var roots = await globalSkillRoots();
+      if (!roots.length) return null;
+      var aggDir = roots[0].root.replace(/\/skills$/, '') + '/waker-skills/' + String(wakerId);
       var node = await ctx.subprocess.resolveExecutable('node');
       var script = [
         'const fs=require("fs"),path=require("path");',
-        'const [agg,home,names]=process.argv.slice(1);',
+        'const [agg,rootsJson,names]=process.argv.slice(1);',
+        'const roots=JSON.parse(rootsJson).map(r=>r.root);',
         'const list=JSON.parse(names);',
         'fs.rmSync(agg,{recursive:true,force:true});',
         'fs.mkdirSync(agg,{recursive:true});',
-        'let n=0;',
+        'let n=0;const missed=[];',
         'for(const nm of list){',
-        ' const src=path.join(home,"skills",nm);',
-        ' try{ if(fs.statSync(path.join(src,"SKILL.md")).isFile()){ fs.symlinkSync(src,path.join(agg,nm),"dir"); n++; } }catch(e){}',
+        ' let linked=false;',
+        ' for(const root of roots){',
+        '  const dirCand=path.join(root,nm);',
+        '  try{ if(fs.statSync(path.join(dirCand,"SKILL.md")).isFile()){ fs.symlinkSync(dirCand,path.join(agg,nm),"dir"); linked=true; break; } }catch(e){}',
+        '  const fileCand=path.join(root,nm+".md");',
+        '  try{ if(fs.statSync(fileCand).isFile()){ fs.symlinkSync(fileCand,path.join(agg,nm+".md"),"file"); linked=true; break; } }catch(e){}',
+        ' }',
+        ' if(!linked)missed.push(nm);',
+        ' else n++;',
         '}',
-        'process.stdout.write(String(n));'
+        'process.stdout.write(JSON.stringify({n:n,missed:missed}));'
       ].join('');
-      var h = ctx.subprocess.spawn({ argv: [node, '-e', script, aggDir, home, JSON.stringify(skillNames)], cwd: '/', stdio: { stdin: 'ignore', stdout: { maxBytes: 4096 }, stderr: { maxBytes: 8192 } }, graceMs: 5000 });
-      var o = await h.done;
-      if (!o || o.exitCode !== 0) return null;
+      var h = ctx.subprocess.spawn({ argv: [node, '-e', script, aggDir, JSON.stringify(roots), JSON.stringify(skillNames)], cwd: '/', stdio: { stdin: 'ignore', stdout: 'pipe', stderr: { maxBytes: 8192 } }, graceMs: 5000 });
+      var chunks = [];
+      try {
+        if (h.stdout && typeof h.stdout.on === 'function') {
+          h.stdout.on('data', function (c) { chunks.push(Buffer.from(c)); });
+          h.stdout.on('error', function () {});
+        }
+        var o = await h.done;
+        if (!o || o.exitCode !== 0) return null;
+        var parsed = null;
+        try { parsed = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); } catch (e) { parsed = null; }
+        if (parsed && parsed.missed && parsed.missed.length) {
+          note('[preset] 技能白名单中未找到全局安装: ' + parsed.missed.join(', '));
+        }
+      } catch (e) { return null; }
       return aggDir;
     }
     async function removeWakerPreset(wakerId) {
@@ -2751,31 +2773,53 @@ return {
       }
       return Object.keys(servers).sort().map(function (k) { return servers[k]; });
     }
-    async function listGlobalSkills() {
-      // host 作用域的 skills 服务不含 filesystem provider —— 直接扫 ~/.dsh/skills/*/SKILL.md
-      var node = await ctx.subprocess.resolveExecutable('node');
+    // 全局技能根目录(与 dsh-skill-filesystem 的默认根对齐, includeDefaultRoots 语义):
+    // dshHome/skills + agentsHome/skills(DSH_AGENTS_HOME ?? ~/.agents) + bundled(DSH_BUNDLED_SKILL_DIR)
+    async function globalSkillRoots() {
+      var roots = [];
       var home = await resolveDshHomeDir();
+      if (home) roots.push({ root: home + '/skills', source: 'user-dsh' });
+      var agentsHome = (typeof process !== 'undefined' && process.env && process.env.DSH_AGENTS_HOME)
+        ? String(process.env.DSH_AGENTS_HOME)
+        : ((typeof process !== 'undefined' && process.env && process.env.HOME) ? process.env.HOME + '/.agents' : '');
+      if (agentsHome) roots.push({ root: agentsHome + '/skills', source: 'user-agents' });
+      var bundled = (typeof process !== 'undefined' && process.env && process.env.DSH_BUNDLED_SKILL_DIR) ? String(process.env.DSH_BUNDLED_SKILL_DIR) : '';
+      if (bundled) roots.push({ root: bundled, source: 'bundled' });
+      return roots;
+    }
+    async function listGlobalSkills() {
+      // host 作用域的 skills 服务不含 filesystem provider —— subprocess 扫全部默认根:
+      // 每根的子目录(SKILL.md)与根级 *.md 文件均算技能;跳过 .system;同名以靠前根优先
+      var node = await ctx.subprocess.resolveExecutable('node');
+      var roots = await globalSkillRoots();
+      if (!roots.length) return [];
       var script = [
         'const fs=require("fs"),path=require("path");',
-        'const root=process.argv[1];',
-        'const out=[];',
-        'let entries=[];try{entries=fs.readdirSync(root,{withFileTypes:true})}catch(e){process.stdout.write("[]");process.exit(0)}',
-        'for(const d of entries){',
-        ' if(!d.isDirectory())continue;',
-        ' const dir=path.join(root,d.name);',
-        ' const sf=path.join(dir,"SKILL.md");',
-        ' if(!fs.existsSync(sf))continue;',
-        ' let name=d.name,desc="";',
-        ' try{',
-        '  const t=fs.readFileSync(sf,"utf8").slice(0,4096);',
-        '  const m=t.match(/^---[\\s\\S]*?^---/m);',
-        '  if(m){const fm=m[0];const nm=fm.match(/^name:\\s*(.+)$/m);if(nm)name=nm[1].trim();const dm=fm.match(/^description:\\s*(.+)$/m);if(dm)desc=dm[1].trim();}',
-        ' }catch(e){}',
-        ' out.push({name:name,description:desc.slice(0,120),dir:dir});',
+        'const roots=JSON.parse(process.argv[1]);',
+        'const out=[];const seen=new Set();',
+        'for(const r of roots){',
+        ' let entries=[];try{entries=fs.readdirSync(r.root,{withFileTypes:true})}catch(e){continue}',
+        ' for(const d of entries){',
+        '  if(d.name===".system")continue;',
+        '  let dir,mdFile,name;',
+        '  if(d.isDirectory()){dir=path.join(r.root,d.name);mdFile=path.join(dir,"SKILL.md");name=d.name;}',
+        '  else if(d.isFile()&&d.name.endsWith(".md")){dir=r.root;mdFile=path.join(r.root,d.name);name=d.name.replace(/\\.md$/,"");}',
+        '  else continue;',
+        '  if(seen.has(name))continue;',
+        '  if(!fs.existsSync(mdFile))continue;',
+        '  seen.add(name);',
+        '  let disp=name,desc="";',
+        '  try{',
+        '   const t=fs.readFileSync(mdFile,"utf8").slice(0,4096);',
+        '   const m=t.match(/^---[\\s\\S]*?^---/m);',
+        '   if(m){const fm=m[0];const nm=fm.match(/^name:\\s*(.+)$/m);if(nm)disp=nm[1].trim();const dm=fm.match(/^description:\\s*(.+)$/m);if(dm)desc=dm[1].trim();}',
+        '  }catch(e){}',
+        '  out.push({name:name,displayName:disp,description:desc.slice(0,120),dir:dir,source:r.source});',
+        ' }',
         '}',
         'process.stdout.write(JSON.stringify(out));'
       ].join('');
-      var h = ctx.subprocess.spawn({ argv: [node, '-e', script, home + '/skills'], cwd: '/', stdio: { stdin: 'ignore', stdout: 'pipe', stderr: { maxBytes: 8192 } }, graceMs: 4000 });
+      var h = ctx.subprocess.spawn({ argv: [node, '-e', script, JSON.stringify(roots)], cwd: '/', stdio: { stdin: 'ignore', stdout: 'pipe', stderr: { maxBytes: 8192 } }, graceMs: 6000 });
       var chunks = [];
       try {
         if (h.stdout && typeof h.stdout.on === 'function') {
