@@ -143,8 +143,8 @@ if (!once) {
       schedule(`${rootMap[dir]}: ${file}`)
     })
   }
-  watch(join(root, 'package.json'), () => schedule('package.json'))
-  watch(join(root, 'plugin.yaml'), () => schedule('plugin.yaml'))
+  // 不监听 package.json: dsh web 运行期间会周期性 touch 链接插件的 package.json
+  // (change 事件但 mtime/size 不变),导致每秒级误重启;构建本就每次重读它
 }
 
 process.on('SIGINT', async () => { suppressedRestart = true; log('shutting down'); await stop(); process.exit(0) })
@@ -153,6 +153,6 @@ process.on('SIGTERM', async () => { suppressedRestart = true; await stop(); proc
 const b = await build()
 if (!b.ok) process.exit(1)
 await start()
-log('watching src/ scripts/ package.json plugin.yaml')
+log('watching src/ scripts/')
 log('  host/bridge change → auto restart (~8s); client-only change → just hard-refresh (⌘⇧R)')
 log('  simulate DingTalk messages: node scripts/sim.mjs "帮我看看这个仓库"  (see --help)')

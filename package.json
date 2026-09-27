@@ -46,7 +46,14 @@
     "dsh-plugin",
     "dingtalk",
     "waker",
-    "deepseek-harness"
+    "dsh-waker",
+    "deepseek-harness",
+    "agent",
+    "ai-agent",
+    "chatbot",
+    "task-dispatcher",
+    "im-bot",
+    "robot"
   ],
   "license": "MIT"
 }

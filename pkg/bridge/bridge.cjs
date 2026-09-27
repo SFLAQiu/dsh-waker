@@ -482,7 +482,7 @@ function handleDownstream(robotId, msg) {
         }
         if (isNew) persistWebhooks();
       }
-      diag({ kind: 'callback', robotId, conversationId: data ? String(data.conversationId || '').slice(-10) : null, hasWebhook: !!(data && data.sessionWebhook), msgType: data ? data.msgtype : null, isAtAll: !!(data && data.isAtAll), atUsers: data && Array.isArray(data.atUsers) ? data.atUsers.length : null, convType: data ? data.conversationType : null, text: data && data.text ? JSON.stringify(data.text).slice(0, 120) : null });
+      diag({ kind: 'callback', robotId, conversationId: data ? String(data.conversationId || '').slice(-10) : null, hasWebhook: !!(data && data.sessionWebhook), msgType: data ? data.msgtype : null, isAtAll: !!(data && data.isAtAll), atUsers: data && Array.isArray(data.atUsers) ? data.atUsers.length : null, convType: data ? data.conversationType : null, text: data && data.text ? JSON.stringify(data.text).slice(0, 800) : null });
       // 事件直接走 stdout JSONL（Desktop webServer 有渲染进程围栏，HTTP 回调不可用）
       emit({
         type: 'event',
