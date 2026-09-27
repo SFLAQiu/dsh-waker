@@ -49,7 +49,8 @@ allowBuilds:
 
 1. DSH 设置 → Waker → IM 管理：填入 Client ID 和 Client Secret →「保存并应用」，状态变「已连接」
 2. DSH 设置 → Waker：配置 Waker（职能、头像）、项目（本地路径或 Git 仓库）、@Waker 绑定
-3. 群里 @机器人 + 任务描述，例如：
+3. Waker 详情 →「能力」页签：按职能从全局目录选用 MCP 工具与技能（支持搜索过滤与全选/清空/全量批量操作；不配置 = 继承全量，详见 [ARCHITECTURE.md](ARCHITECTURE.md) 能力治理机制）
+4. 群里 @机器人 + 任务描述，例如：
 
 > @机器人 帮我看看当前仓库的结构
 
