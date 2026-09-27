@@ -33,7 +33,7 @@
 ### 2. 安装插件
 
 ```bash
-dsh plugin --profile web add github:sflyq/dsh-waker#v0.1.0
+dsh plugin --profile web add https://github.com/SFLAQiu/dsh-waker.git
 ```
 
 若提示 `blocked build`，把 CLI 打印的键加进 `~/.dsh/profiles/web/pnpm-workspace.yaml` 后重跑：
