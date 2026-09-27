@@ -6,7 +6,7 @@
   "main": "pkg/lib/index.js",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/sflyq/dsh-waker.git"
+    "url": "git+https://github.com/SFLAQiu/dsh-waker.git"
   },
   "exports": {
     ".": "./pkg/lib/index.js",
