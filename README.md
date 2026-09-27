@@ -12,7 +12,7 @@
 - **任务看板**：排队中 / 运行中 / 需要操作 / 失败 / 已取消 / 已完成，可筛选、取消、重试
 - **排队与并发**：同时最多跑 N 个任务（默认 2），超限自动排队
 
-![dsh-waker 任务看板状态机](resource/dsh-waker-kanban.jpeg)
+![dsh-waker 工作流程](resource/dsh-waker-introduction.jpeg)
 
 ## 解决什么问题
 
