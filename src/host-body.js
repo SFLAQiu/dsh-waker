@@ -381,6 +381,32 @@ return {
       if (!Array.isArray(content)) return '';
       return content.filter(function (b) { return b && b.type === 'text'; }).map(function (b) { return b.text || ''; }).join('');
     }
+    // 钉钉「回复引用」消息两种实测形状(2026-09 diag.log):
+    //   旧: text.content 为字符串,正文在 text.repliedMsg.content(字符串) — 仅引用时 content 为空
+    //   新: text = { isReplyMsg, repliedMsg: {..., content: {text: '正文'}}, content: ' ' }
+    //       content 只有空格, repliedMsg.content 是 {text} 对象
+    // 健壮解析: content/repliedMsg.content 均兼容 字符串 | {text} 两形;只引用不写字时
+    // 直接以引用正文作为消息主体(不包「引用:」前缀), judge 与任务会话拿到的是真实需求;
+    // 用户同时写了正文时, 引用原文附为上下文。
+    function flattenDingText(v) {
+      if (v == null) return '';
+      if (typeof v === 'string') return v.trim();
+      if (typeof v === 'object') {
+        if (typeof v.text === 'string') return v.text.trim();
+        return String(v).trim();
+      }
+      return String(v).trim();
+    }
+    function textOfBotMsg(data) {
+      var t = data && data.text ? data.text : null;
+      if (!t) return '';
+      var main = flattenDingText(t.content);
+      var rp = t.repliedMsg;
+      var quoted = rp ? flattenDingText(rp.content !== undefined ? rp.content : rp.text) : '';
+      if (main && quoted) return main + '\n（引用: ' + quoted + '）';
+      if (main) return main;
+      return quoted; // 只引用不写字: 引用正文即消息主体
+    }
     function writeStdin(action) {
       var handle = state.bridge;
       if (!handle || !handle.stdin) return false;
@@ -1742,7 +1768,7 @@ return {
         rbEv.seen += 1;
         rbEv.lastAt = state.lastEventAt;
         var data = (ev && ev.data && typeof ev.data === 'object') ? ev.data : {};
-        var text = data.text && data.text.content ? data.text.content : '';
+        var text = textOfBotMsg(data);
         var sender = data.senderNick || data.senderStaffId || '钉钉用户';
         var conv = data.conversationId || '';
         state.recentEvents.push({
